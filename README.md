@@ -23,12 +23,19 @@ Optional global registration for `bun x @jasonkuhrt/shan`:
 
 ```sh
 just install-global
+just install-skills-user
 ```
 
 If you do not want the global registration, run it from the repo:
 
 ```sh
 bun run shan -- skills list
+```
+
+Install shan's bundled user-level skills into `~/.claude/skills-library` and equip them:
+
+```sh
+just install-skills-user
 ```
 
 ## What Shan Manages
@@ -66,6 +73,7 @@ shan skills undo [N]
 shan skills redo [N]
 shan skills doctor [--no-fix]
 shan skills migrate [--execute]
+shan skills install-user
 ```
 
 Common examples:

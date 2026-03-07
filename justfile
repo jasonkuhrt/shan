@@ -9,6 +9,9 @@ install:
 install-global:
   bun link
 
+install-skills-user:
+  bun run shan -- skills install-user
+
 run *args:
   bun run shan -- {{ args }}
 

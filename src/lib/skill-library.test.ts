@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from './skill-library.js'
 
@@ -75,10 +75,26 @@ describe('listLibrary', () => {
       const results = await run(Lib.listLibrary([userLib, projectLib]))
       const shared = results.filter((r) => r.colonName === 'shared')
       expect(shared).toHaveLength(1)
-      expect(shared[0]!.libraryDir).toBe(userLib)
+      expect(shared[0]?.libraryDir).toBe(userLib)
     } finally {
       await rm(userLib, { recursive: true, force: true })
       await rm(projectLib, { recursive: true, force: true })
+    }
+  })
+
+  test('follows symlinked library roots', async () => {
+    const realLib = path.join(tmpBase, 'user-lib-4-real')
+    const symlinkLib = path.join(tmpBase, 'user-lib-4-link')
+    try {
+      await createSkill(realLib, 'alpha')
+      await symlink(realLib, symlinkLib)
+
+      const results = await run(Lib.listLibrary([symlinkLib]))
+      const names = results.map((r) => r.colonName)
+      expect(names).toContain('alpha')
+    } finally {
+      await rm(symlinkLib, { recursive: true, force: true })
+      await rm(realLib, { recursive: true, force: true })
     }
   })
 

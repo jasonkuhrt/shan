@@ -27,6 +27,7 @@ import {
   readFile,
   readlink,
   rm,
+  stat,
   symlink,
   unlink,
   writeFile,
@@ -646,8 +647,8 @@ export const libraryExists = (scope?: Scope) =>
     const dirs = scope ? librarySearchOrder(scope) : [LIBRARY_DIR, projectLibraryDir()]
     for (const dir of dirs) {
       const exists = yield* Effect.tryPromise(async () => {
-        const stat = await lstat(dir)
-        return stat.isDirectory()
+        const dirStat = await stat(dir)
+        return dirStat.isDirectory()
       }).pipe(Effect.catchAll(() => Effect.succeed(false)))
       if (exists) return true
     }
@@ -831,8 +832,8 @@ export const listLibrary = (dirs?: readonly string[]) =>
 
     for (const dir of searchDirs) {
       const exists = yield* Effect.tryPromise(async () => {
-        const s = await lstat(dir)
-        return s.isDirectory()
+        const dirStat = await stat(dir)
+        return dirStat.isDirectory()
       }).pipe(Effect.catchAll(() => Effect.succeed(false)))
       if (!exists) continue
 
