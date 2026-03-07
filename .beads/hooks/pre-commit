@@ -1,0 +1,34 @@
+#!/usr/bin/env sh
+# --- BEGIN BEADS INTEGRATION v0.59.0 ---
+# This section is managed by beads. Do not remove these markers.
+if command -v bd >/dev/null 2>&1; then
+  export BD_GIT_HOOK=1
+  bd hooks run pre-commit "$@"
+  _bd_exit=$?; if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
+fi
+# --- END BEADS INTEGRATION v0.59.0 ---
+
+# Staged files (excluding deleted)
+STAGED=$(git diff --cached --name-only --diff-filter=d)
+if [ -z "$STAGED" ]; then exit 0; fi
+
+STAGED_TS=$(echo "$STAGED" | grep '\.ts$' || true)
+
+# Lint — staged .ts files only
+if [ -n "$STAGED_TS" ]; then
+  echo "$STAGED_TS" | xargs bunx oxlint --type-aware --deny-warnings
+fi
+
+# Format — all staged files (oxfmt handles non-ts too)
+echo "$STAGED" | xargs bunx oxfmt --check
+
+# Types — global (a change anywhere can break types anywhere)
+bunx tsgo
+
+# Tests + coverage — only if source changed
+STAGED_SRC=$(echo "$STAGED_TS" | grep '^src/' || true)
+STAGED_TESTS=$(echo "$STAGED_TS" | grep '\.test\.ts$' || true)
+if [ -n "$STAGED_SRC" ] || [ -n "$STAGED_TESTS" ]; then
+  bun run test
+  bun run check:cov
+fi

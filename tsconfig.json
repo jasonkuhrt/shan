@@ -1,0 +1,25 @@
+{
+  "extends": ["@tsconfig/strictest/tsconfig.json", "@tsconfig/node24/tsconfig.json"],
+  "compilerOptions": {
+    // Package
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+
+    // DX
+    "tsBuildInfoFile": "node_modules/.cache/.tsbuildinfo",
+    "noErrorTruncation": true,
+    "incremental": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+
+    // Downstream DX
+    "isolatedModules": true, // performance
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true
+  },
+  "include": ["src", "tests", "scripts"],
+  "exclude": ["build"]
+}
