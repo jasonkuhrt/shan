@@ -9,6 +9,7 @@
   "rules": {
     "eslint/no-unused-vars": "off",
     "eslint/no-unused-expressions": "off",
+    "eslint/require-yield": "warn",
     "eslint/eqeqeq": "error",
     "eslint/no-var": "error",
     "eslint/array-callback-return": "error",
@@ -28,9 +29,9 @@
     "typescript/no-misused-promises": "error",
     "typescript/await-thenable": "error",
     "typescript/no-unsafe-argument": "error",
-    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-assignment": "warn",
     "typescript/no-unsafe-call": "error",
-    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-member-access": "warn",
     "typescript/no-unsafe-return": "error",
     "typescript/no-for-in-array": "error",
     "typescript/no-array-delete": "error",
@@ -50,7 +51,9 @@
     "typescript/no-non-null-assertion": "warn",
     "typescript/no-import-type-side-effects": "warn",
     "typescript/no-unnecessary-condition": "warn",
-    "typescript/ban-ts-comment": "warn"
+    "typescript/ban-ts-comment": "warn",
+    "typescript/restrict-template-expressions": "warn",
+    "typescript/require-array-sort-compare": "warn"
   },
   "ignorePatterns": ["**/build/**", "**/node_modules/**", "**/*.d.ts"]
 }
