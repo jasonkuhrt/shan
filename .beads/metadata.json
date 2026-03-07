@@ -2,6 +2,7 @@
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "server",
-  "dolt_database": "template_typescript_lib",
+  "dolt_server_port": 13573,
+  "dolt_database": "shan",
   "project_id": "9a14d658-ed8b-4208-b475-5d9a7023a8b0"
 }
