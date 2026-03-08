@@ -27,7 +27,7 @@ const installBundledSkill = (relativePath: string) =>
 
 const clearUserOutfitEntries = () =>
   Effect.gen(function* () {
-    yield* Effect.tryPromise(() => mkdir(Lib.USER_OUTFIT_DIR, { recursive: true }))
+    yield* Lib.ensureOutfitDir(Lib.USER_OUTFIT_DIR)
     for (const entry of USER_OUTFIT_ENTRIES) {
       const entryPath = path.join(Lib.USER_OUTFIT_DIR, entry)
       yield* Effect.tryPromise(() => rm(entryPath, { recursive: true, force: true }))

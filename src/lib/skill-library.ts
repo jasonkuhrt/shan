@@ -627,6 +627,47 @@ export const bootstrapCurrent = (scope: Scope) =>
 export const outfitDir = (scope: Scope): string =>
   scope === 'user' ? USER_OUTFIT_DIR : path.join(process.cwd(), '.claude/skills')
 
+/**
+ * Ensure an outfit directory exists and is writable.
+ *
+ * Handles the case where the path is a broken symlink (e.g. dotfiles-managed
+ * symlink whose target was deleted). `mkdir` fails with EEXIST on broken
+ * symlinks, so we detect and report a clear error instead.
+ */
+export const ensureOutfitDir = (dir: string) =>
+  Effect.gen(function* () {
+    const entryStat = yield* Effect.tryPromise(() => lstat(dir)).pipe(
+      Effect.catchAll(() => Effect.succeed(null)),
+    )
+
+    if (entryStat?.isSymbolicLink()) {
+      // Symlink exists — check if target resolves
+      const targetOk = yield* Effect.tryPromise(async () => {
+        await stat(dir) // stat follows symlinks
+        return true
+      }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+
+      if (!targetOk) {
+        const target = yield* Effect.tryPromise(() => readlink(dir)).pipe(
+          Effect.catchAll(() => Effect.succeed('(unknown)')),
+        )
+        return yield* Effect.fail(new BrokenOutfitDirError({ path: dir, symlinkTarget: target }))
+      }
+      // Symlink resolves — ensure the target is a directory
+      return
+    }
+
+    if (entryStat?.isDirectory()) return
+
+    // Doesn't exist at all — create it
+    yield* Effect.tryPromise(() => mkdir(dir, { recursive: true }))
+  })
+
+export class BrokenOutfitDirError extends Data.TaggedError('BrokenOutfitDirError')<{
+  readonly path: string
+  readonly symlinkTarget: string
+}> {}
+
 // ── Name translation ───────────────────────────────────────────────
 
 /** Translate colon name to library-relative path: "ts:tooling" → "ts/tooling" */

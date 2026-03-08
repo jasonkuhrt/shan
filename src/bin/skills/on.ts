@@ -49,7 +49,7 @@ export const skillsOn = (targetInput: string, options: SkillsOnOptions) =>
     const dir = Lib.outfitDir(options.scope)
 
     // Ensure outfit directory exists
-    yield* Effect.tryPromise(() => mkdir(dir, { recursive: true }))
+    yield* Lib.ensureOutfitDir(dir)
 
     // ── Phase 1: Validate all targets (no side effects) ─────────────
 

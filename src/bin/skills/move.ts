@@ -78,6 +78,12 @@ export const skillsMove = (
 
     // ── Phase 2: Execute all mutations ──────────────────────────────
 
+    // Ensure outfit dirs are functional before any mutations
+    if (axis === 'scope') {
+      const targetScope = direction === 'up' ? 'user' : 'project'
+      yield* Lib.ensureOutfitDir(Lib.outfitDir(targetScope))
+    }
+
     const state = yield* Lib.loadState()
     const config = yield* Lib.loadConfig()
     const allSubActions: Lib.HistoryEntry[] = []
@@ -458,7 +464,7 @@ const validateCommitmentDown = (
 
 const executeScopeUpCore = (src: string, dest: string, target: string) =>
   Effect.gen(function* () {
-    yield* Effect.tryPromise(() => mkdir(path.dirname(dest), { recursive: true }))
+    yield* Lib.ensureOutfitDir(path.dirname(dest))
     yield* Effect.tryPromise(() => rename(src, dest))
     yield* Lib.manageGitignoreRemove(process.cwd(), [
       `.claude/skills/${Lib.flattenName(Lib.colonToPath(target))}`,
@@ -485,7 +491,7 @@ const executeScopeUpPluggableInstalled = (
     }
     // On at user scope
     const libTarget = path.join(Lib.LIBRARY_DIR, relPath)
-    yield* Effect.tryPromise(() => mkdir(path.dirname(userOutfitPath), { recursive: true }))
+    yield* Lib.ensureOutfitDir(path.dirname(userOutfitPath))
     yield* Effect.tryPromise(() => symlink(libTarget, userOutfitPath))
   })
 
@@ -497,7 +503,7 @@ const executeMoveLibraryDir = (src: string, dest: string) =>
 
 const executeScopeDownCore = (src: string, dest: string) =>
   Effect.gen(function* () {
-    yield* Effect.tryPromise(() => mkdir(path.dirname(dest), { recursive: true }))
+    yield* Lib.ensureOutfitDir(path.dirname(dest))
     yield* Effect.tryPromise(() => rename(src, dest))
   })
 
@@ -524,7 +530,7 @@ const executeScopeDownPluggable = (
     yield* Effect.tryPromise(() => mkdir(path.dirname(projLibPath), { recursive: true }))
     yield* Effect.tryPromise(() => rename(userLibPath, projLibPath))
     // On at project scope
-    yield* Effect.tryPromise(() => mkdir(path.dirname(projectOutfitPath), { recursive: true }))
+    yield* Lib.ensureOutfitDir(path.dirname(projectOutfitPath))
     yield* Effect.tryPromise(() => symlink(projLibPath, projectOutfitPath))
   })
 
@@ -547,7 +553,7 @@ const executeCommitmentUp = (
       yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
     }
     // Copy library contents to outfit (becomes core)
-    yield* Effect.tryPromise(() => mkdir(path.dirname(outfitPath), { recursive: true }))
+    yield* Lib.ensureOutfitDir(path.dirname(outfitPath))
     yield* Effect.tryPromise(() => cp(libraryPath, outfitPath, { recursive: true }))
   })
 
