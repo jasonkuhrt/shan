@@ -81,8 +81,9 @@ const mapSkill: DimensionMapper = (entry) => {
 const mapTool: DimensionMapper = (entry) => {
   if (entry.tools.length === 0) return SYMBOLS.tool.none
   // Show the first tool (most significant)
-  const tool = entry.tools[0]!
-  return (SYMBOLS.tool as Record<string, string>)[tool] ?? SYMBOLS.tool.none
+  const tool = entry.tools[0]
+  if (!tool) return SYMBOLS.tool.none
+  return (SYMBOLS.tool as Record<string, string | undefined>)[tool] ?? SYMBOLS.tool.none
 }
 
 const mapCache: DimensionMapper = (entry) => {

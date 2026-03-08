@@ -169,7 +169,7 @@ const printPlan = (plan: MigrationPlan) =>
 
     if (groups.size > 0) {
       yield* Console.log('Groups:')
-      for (const [group, paths] of [...groups].sort()) {
+      for (const [group, paths] of [...groups].sort((a, b) => a[0].localeCompare(b[0]))) {
         yield* Console.log(`  ${group}/`)
         for (const p of paths.sort()) {
           yield* Console.log(`    ${p}/`)

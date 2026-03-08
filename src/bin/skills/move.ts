@@ -132,7 +132,7 @@ const validateMove = (
   direction: MoveDirection,
   target: string,
   options: SkillsMoveOptions,
-): Effect.Effect<ValidationResult, never> =>
+): Effect.Effect<ValidationResult> =>
   Effect.gen(function* () {
     if (axis === 'scope' && direction === 'up') return yield* validateScopeUp(target, options)
     if (axis === 'scope' && direction === 'down') return yield* validateScopeDown(target, options)
@@ -148,7 +148,7 @@ const validateMove = (
 const validateScopeUp = (
   target: string,
   _options: SkillsMoveOptions,
-): Effect.Effect<ValidationResult, never> =>
+): Effect.Effect<ValidationResult> =>
   Effect.gen(function* () {
     const flatName = Lib.flattenName(Lib.colonToPath(target))
     const projectOutfitDir = Lib.outfitDir('project')
@@ -258,7 +258,7 @@ const validateScopeUp = (
 const validateScopeDown = (
   target: string,
   _options: SkillsMoveOptions,
-): Effect.Effect<ValidationResult, never> =>
+): Effect.Effect<ValidationResult> =>
   Effect.gen(function* () {
     const flatName = Lib.flattenName(Lib.colonToPath(target))
     const projectOutfitDir = Lib.outfitDir('project')
@@ -346,7 +346,7 @@ const validateScopeDown = (
 const validateCommitmentUp = (
   target: string,
   _options: SkillsMoveOptions,
-): Effect.Effect<ValidationResult, never> =>
+): Effect.Effect<ValidationResult> =>
   Effect.gen(function* () {
     const flatName = Lib.flattenName(Lib.colonToPath(target))
     const relPath = Lib.colonToPath(target)
@@ -395,7 +395,7 @@ const validateCommitmentUp = (
 const validateCommitmentDown = (
   target: string,
   _options: SkillsMoveOptions,
-): Effect.Effect<ValidationResult, never> =>
+): Effect.Effect<ValidationResult> =>
   Effect.gen(function* () {
     const flatName = Lib.flattenName(Lib.colonToPath(target))
     const relPath = Lib.colonToPath(target)

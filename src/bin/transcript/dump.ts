@@ -79,7 +79,7 @@ const extractUserSummary = (entry: UserEntry): string => {
     return `tool_result ×${toolResults.length}`
   }
   const textBlock = content.find((b) => b.type === 'text')
-  if (textBlock && textBlock.type === 'text') {
+  if (textBlock?.type === 'text') {
     return textBlock.text.slice(0, COL_SUMMARY).replace(/\n/g, ' ')
   }
   return '(content)'

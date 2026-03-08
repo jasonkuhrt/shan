@@ -20,7 +20,7 @@ export const taskOpen = (input: string | undefined, options: OpenOptions = {}) =
     const target = input ? yield* resolveTarget(input, options) : yield* pickTask(options)
 
     const editor = process.env['EDITOR'] ?? 'zed'
-    const editorTarget = target.kind === 'task' ? target.taskPath! : target.listPath
+    const editorTarget = target.kind === 'task' ? target.taskPath : target.listPath
 
     yield* Console.log(`Opening: ${editorTarget}`)
 

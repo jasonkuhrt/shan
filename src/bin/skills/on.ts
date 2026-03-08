@@ -66,7 +66,7 @@ export const skillsOn = (targetInput: string, options: SkillsOnOptions) =>
 
       // Track top-level group for router generation (with its library dir)
       if (resolved.nodeType === 'group' || resolved.nodeType === 'callable-group') {
-        const topGroup = target.split(':')[0]!
+        const topGroup = target.split(':')[0] ?? target
         if (topGroup === target || !target.includes(':')) {
           groupsToRoute.set(topGroup, resolved.libraryDir)
         }

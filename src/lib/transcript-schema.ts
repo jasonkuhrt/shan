@@ -303,6 +303,7 @@ export const decodeToolInput = (block: ToolUseBlock): unknown => {
   if (!isKnownTool(block.name)) return block.input
   // Each schema is Schema<A, I, R> with different A — use Schema.Unknown as the common decode target
   // since we return `unknown` anyway. The individual schemas validate the shape.
-  const schema = ToolInputSchemas[block.name] as Schema.Schema<unknown>
+  // eslint-disable-next-line no-unsafe-type-assertion -- union of Schema types narrowed to Schema<unknown> for uniform decode
+  const schema = ToolInputSchemas[block.name] as unknown as Schema.Schema<unknown>
   return Schema.decodeUnknownSync(schema)(block.input)
 }

@@ -122,11 +122,11 @@ const formatDate = (date: Date): string => {
  */
 const findCommonPrefix = (strings: string[]): string => {
   if (strings.length === 0) return ''
-  if (strings.length === 1) return strings[0]!
+  if (strings.length === 1) return strings[0] ?? ''
 
   const sorted = [...strings].sort()
-  const first = sorted[0]!
-  const last = sorted[sorted.length - 1]!
+  const first = sorted[0] ?? ''
+  const last = sorted[sorted.length - 1] ?? ''
 
   let i = 0
   while (i < first.length && first[i] === last[i]) {
@@ -233,7 +233,7 @@ export const pickSession = (options: PickSessionOptions = {}) =>
     }
 
     // Get terminal width (with fallback)
-    const termWidth = process.stdout.columns ?? 80
+    const termWidth = process.stdout.columns || 80
     // Account for clack's prefix ("○ " = 2 chars, plus some margin)
     const maxLabelWidth = termWidth - 4
 
@@ -269,5 +269,5 @@ export const pickSession = (options: PickSessionOptions = {}) =>
       return yield* Effect.fail(new Error('Selection cancelled'))
     }
 
-    return selected as string
+    return selected
   })

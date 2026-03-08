@@ -55,7 +55,7 @@ export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
 
       // Track top-level group for router cleanup
       if (resolved.nodeType === 'group' || resolved.nodeType === 'callable-group') {
-        const topGroup = target.split(':')[0]!
+        const topGroup = target.split(':')[0] ?? target
         if (topGroup === target || !target.includes(':')) {
           groupsToClean.add(topGroup)
         }
@@ -149,8 +149,8 @@ export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
           targets,
           scope,
           timestamp: new Date().toISOString(),
-          snapshot: snapshots.get(scope)!,
-          generatedRouters: routersBeforeMap.get(scope)!,
+          snapshot: snapshots.get(scope) ?? [],
+          generatedRouters: routersBeforeMap.get(scope) ?? [],
         }),
       )
       if (history.entries.length > config.skills.historyLimit) {

@@ -52,15 +52,16 @@ describe('skills install-user', () => {
       expect(result.stderr).toBe('')
       expect(result.stdout).toContain('Installing bundled shan skills')
 
-      for (const skillFile of [
+      const skillFiles = [
         path.join(home, '.claude/skills-library/shan/SKILL.md'),
         path.join(home, '.claude/skills-library/skills/SKILL.md'),
         path.join(home, '.claude/skills-library/skills/change/SKILL.md'),
         path.join(home, '.claude/skills-library/skills/list/SKILL.md'),
         path.join(home, '.claude/skills-library/skills/doctor/SKILL.md'),
-      ]) {
-        const stat = await lstat(skillFile)
-        expect(stat.isFile()).toBe(true)
+      ]
+      const skillStats = await Promise.all(skillFiles.map((f) => lstat(f)))
+      for (const fileStat of skillStats) {
+        expect(fileStat.isFile()).toBe(true)
       }
 
       const expectedLinks = [
@@ -71,11 +72,17 @@ describe('skills install-user', () => {
         ['skills_doctor', 'skills/doctor'],
       ] as const
 
-      for (const [entryName, relPath] of expectedLinks) {
-        const entryPath = path.join(home, '.claude/skills', entryName)
-        const stat = await lstat(entryPath)
-        expect(stat.isSymbolicLink()).toBe(true)
-        expect(await readlink(entryPath)).toBe(path.join(home, '.claude/skills-library', relPath))
+      const linkChecks = await Promise.all(
+        expectedLinks.map(async ([entryName, relPath]) => {
+          const entryPath = path.join(home, '.claude/skills', entryName)
+          const entryStat = await lstat(entryPath)
+          const target = await readlink(entryPath)
+          return { entryStat, target, relPath }
+        }),
+      )
+      for (const check of linkChecks) {
+        expect(check.entryStat.isSymbolicLink()).toBe(true)
+        expect(check.target).toBe(path.join(home, '.claude/skills-library', check.relPath))
       }
     } finally {
       await rm(home, { recursive: true, force: true })

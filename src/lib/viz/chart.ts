@@ -70,11 +70,11 @@ const calculateTokenRows = (maxTokens: number): number => {
 
 const getBlockChar = (value: number, rowMin: number, rowMax: number): string => {
   if (value <= rowMin) return ' '
-  if (value >= rowMax) return BLOCKS[8]!
+  if (value >= rowMax) return BLOCKS[8] ?? '█'
   const normalized = (value - rowMin) / (rowMax - rowMin)
   // Ensure any value in this row shows at least ▁ (index 1), not space
   const index = Math.max(1, Math.round(normalized * 8))
-  return BLOCKS[Math.min(index, 8)]!
+  return BLOCKS[Math.min(index, 8)] ?? '█'
 }
 
 const formatDuration = (ms: number): string => {
@@ -152,8 +152,8 @@ export const renderChart = (options: ChartOptions): string[] => {
 
   // Render rows from top to bottom
   for (let row = numRows - 1; row >= 0; row--) {
-    const rowMax = scale[row]!
-    const rowMin = row === 0 ? 0 : scale[row - 1]!
+    const rowMax = scale[row] ?? 0
+    const rowMin = row === 0 ? 0 : (scale[row - 1] ?? 0)
     // Use labelWidth-1 for text, leaving 1 char for gutter space
     const label = formatYLabel(rowMax).padStart(labelWidth - 1) + ' '
 

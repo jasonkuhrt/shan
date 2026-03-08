@@ -70,7 +70,7 @@ const taskToMarkdown = (task: typeof Task.Type): string => {
 
 const copyTaskFile = (srcPath: string, destPath: string, md: boolean) =>
   Effect.gen(function* () {
-    const raw = yield* Effect.promise(() => Bun.file(srcPath).json())
+    const raw: unknown = yield* Effect.promise(() => Bun.file(srcPath).json())
 
     if (md) {
       const decoded = Schema.decodeUnknownOption(Task)(raw)
@@ -111,7 +111,7 @@ export const taskDump = (input: string | undefined, options: DumpOptions = {}) =
       const destPath = join(outputDir, destFile)
 
       yield* Console.log(`Copying: ${target.taskPath}`)
-      const count = yield* copyTaskFile(target.taskPath!, destPath, options.md ?? false)
+      const count = yield* copyTaskFile(target.taskPath, destPath, options.md ?? false)
       if (count > 0) {
         yield* Console.log(`Wrote: ${destPath}`)
       }

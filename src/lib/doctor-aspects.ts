@@ -34,7 +34,7 @@ export interface DoctorAspect {
   readonly name: string
   readonly description: string
   readonly level: Level
-  readonly detect: (ctx: DoctorContext) => Effect.Effect<DoctorFinding[], never>
+  readonly detect: (ctx: DoctorContext) => Effect.Effect<DoctorFinding[]>
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -147,7 +147,7 @@ const tryGitRenameRepoint = (name: string, oldTarget: string, scope: Lib.Scope) 
       // Parse: R100\told/path\tnew/path
       const parts = renameOutput.split('\t')
       if (parts.length >= 3) {
-        const newRelPath = parts[2]!.replace(/\/SKILL\.md$/, '')
+        const newRelPath = (parts[2] ?? '').replace(/\/SKILL\.md$/, '')
         const newAbsPath = path.join(repoRoot, newRelPath)
         const newExists = yield* checkSymlinkTarget(newAbsPath)
         if (newExists) {
@@ -309,7 +309,7 @@ const frontmatterMismatch: DoctorAspect = {
   description: "Skill frontmatter name doesn't match directory",
   level: 'error',
   detect: (ctx) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const findings: DoctorFinding[] = []
       for (const skill of ctx.library) {
         if (!skill.frontmatter) {
@@ -343,7 +343,7 @@ const nameConflict: DoctorAspect = {
   description: 'Library skill collides with core skill in outfit',
   level: 'error',
   detect: (ctx) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const findings: DoctorFinding[] = []
       const userCoreNames = new Set(
         ctx.userOutfit.filter((e) => e.commitment === 'core').map((e) => e.name),
@@ -384,7 +384,7 @@ const duplicateName: DoctorAspect = {
   description: 'Multiple library paths produce same flattened name',
   level: 'error',
   detect: (ctx) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const findings: DoctorFinding[] = []
       const flatNames = new Map<string, string[]>()
       for (const skill of ctx.library) {
@@ -514,7 +514,7 @@ const crossScopeInstall: DoctorAspect = {
   description: 'User outfit symlink points into project library',
   level: 'error',
   detect: (ctx) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const findings: DoctorFinding[] = []
       for (const entry of ctx.userOutfit) {
         if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
@@ -549,7 +549,7 @@ const newLeaf: DoctorAspect = {
   description: 'Installed group has new leaf skills not yet symlinked',
   level: 'warning',
   detect: (ctx) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const findings: DoctorFinding[] = []
       for (const outfit of [
         { entries: ctx.userOutfit, scope: 'user' as Lib.Scope, label: 'user' },

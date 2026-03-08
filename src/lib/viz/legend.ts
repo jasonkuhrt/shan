@@ -266,7 +266,7 @@ const balanceColumns = (
     // columns is guaranteed non-empty since numColumns >= 1
     const shortestColumn = columns.reduce((min, col) =>
       col.totalHeight < min.totalHeight ? col : min,
-    )!
+    )
     shortestColumn.entries.push(entry)
     shortestColumn.totalHeight += height
   }

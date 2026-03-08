@@ -206,7 +206,7 @@ export const reportResults = (rows: readonly ResultRow[]) =>
     }
 
     const maxName = Math.max(...rows.map((r) => r.name.length))
-    const detailRows = rows.filter((r) => r.scope || r.commitment)
+    const detailRows = rows.filter((r) => r.scope ?? r.commitment)
     const maxScope =
       detailRows.length > 0 ? Math.max(...detailRows.map((r) => (r.scope ?? '').length)) : 0
 
@@ -418,7 +418,9 @@ export const loadConfig = () =>
     )
     if (!content) return DEFAULT_CONFIG
     try {
-      return { ...DEFAULT_CONFIG, ...JSON.parse(content) } as ShanConfig
+      const parsed: unknown = JSON.parse(content)
+      if (!isRecord(parsed)) return DEFAULT_CONFIG
+      return { ...DEFAULT_CONFIG, ...parsed } as ShanConfig
     } catch {
       return DEFAULT_CONFIG
     }
@@ -432,41 +434,82 @@ const DEFAULT_STATE: ShanState = {
   history: {},
 }
 
+/** Type guard for Record<string, unknown>. */
+const isRecord = (val: unknown): val is Record<string, unknown> =>
+  typeof val === 'object' && val !== null && !Array.isArray(val)
+
+/** Typed getter for unknown record values. */
+const getString = (obj: Record<string, unknown>, key: string): string | undefined => {
+  const val = obj[key]
+  return typeof val === 'string' ? val : undefined
+}
+
+const getStringArray = (obj: Record<string, unknown>, key: string): string[] => {
+  const val = obj[key]
+  return Array.isArray(val)
+    ? (val as unknown[]).filter((v): v is string => typeof v === 'string')
+    : []
+}
+
+const getObjectArray = (obj: Record<string, unknown>, key: string): Record<string, unknown>[] => {
+  const val = obj[key]
+  return Array.isArray(val) ? (val as unknown[]).filter(isRecord) : []
+}
+
+const getNumber = (obj: Record<string, unknown>, key: string): number | undefined => {
+  const val = obj[key]
+  return typeof val === 'number' ? val : undefined
+}
+
+const getObject = (
+  obj: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined => {
+  const val = obj[key]
+  return isRecord(val) ? val : undefined
+}
+
 /** Reconstruct a HistoryEntry from raw JSON (handles v1 `op` field and v2 `_tag` field). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const deserializeHistoryEntry = (raw: any): HistoryEntry | null => {
+const deserializeHistoryEntry = (raw: Record<string, unknown>): HistoryEntry | null => {
   // Migrate v1 `op` field → v2 `_tag` field
-  const tag = raw['_tag'] ?? (raw['op'] === 'on' ? 'OnOp' : raw['op'] === 'off' ? 'OffOp' : null)
+  const tag =
+    getString(raw, '_tag') ?? (raw['op'] === 'on' ? 'OnOp' : raw['op'] === 'off' ? 'OffOp' : null)
   if (!tag) return null
 
   const base = {
-    targets: (raw['targets'] as string[]) ?? [],
-    scope: (raw['scope'] as string) ?? '',
-    timestamp: (raw['timestamp'] as string) ?? '',
+    targets: getStringArray(raw, 'targets'),
+    scope: getString(raw, 'scope') ?? '',
+    timestamp: getString(raw, 'timestamp') ?? '',
   }
 
   if (tag === 'OnOp' || tag === 'OffOp') {
     const fields = {
       ...base,
-      snapshot: (raw['snapshot'] as string[]) ?? [],
-      generatedRouters: (raw['generatedRouters'] as string[]) ?? [],
+      snapshot: getStringArray(raw, 'snapshot'),
+      generatedRouters: getStringArray(raw, 'generatedRouters'),
     }
     return tag === 'OnOp' ? OnOp(fields) : OffOp(fields)
   }
 
   if (tag === 'MoveOp') {
-    const subRaw = (raw['subActions'] as any[]) ?? []
+    const subRaw = getObjectArray(raw, 'subActions')
+    const axisVal = getString(raw, 'axis')
+    const dirVal = getString(raw, 'direction')
     return MoveOp({
       ...base,
-      axis: raw['axis'] ?? 'scope',
-      direction: raw['direction'] ?? 'up',
+      axis: axisVal === 'scope' || axisVal === 'commitment' ? axisVal : 'scope',
+      direction: dirVal === 'up' || dirVal === 'down' ? dirVal : 'up',
       subActions: subRaw
         .map((s) => deserializeHistoryEntry(s))
         .filter((e): e is HistoryEntry => e !== null),
     })
   }
 
-  const fsFields = { ...base, sourcePath: raw['sourcePath'] ?? '', destPath: raw['destPath'] ?? '' }
+  const fsFields = {
+    ...base,
+    sourcePath: getString(raw, 'sourcePath') ?? '',
+    destPath: getString(raw, 'destPath') ?? '',
+  }
   if (tag === 'CopyToOutfitOp') return CopyToOutfitOp(fsFields)
   if (tag === 'MoveToLibraryOp') return MoveToLibraryOp(fsFields)
   if (tag === 'MoveDirOp') return MoveDirOp(fsFields)
@@ -484,23 +527,29 @@ export const loadState = () =>
     )
     if (!content) return DEFAULT_STATE
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const raw = JSON.parse(content) as any
-      const rawHistory = (raw['history'] ?? {}) as Record<string, any>
+      const raw: unknown = JSON.parse(content)
+      const rawObj = isRecord(raw) ? raw : {}
+      const rawHistory = getObject(rawObj, 'history') ?? {}
       const history: Record<string, ProjectHistory> = {}
       for (const [key, ph] of Object.entries(rawHistory)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rawEntries = ((ph as any)['entries'] ?? []) as any[]
+        const phObj = isRecord(ph) ? ph : {}
+        const rawEntries = getObjectArray(phObj, 'entries')
         const entries = rawEntries
           .map((e) => deserializeHistoryEntry(e))
           .filter((e): e is HistoryEntry => e !== null)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const undoneCount = ((ph as Record<string, unknown>)['undoneCount'] as number) ?? 0
+        const undoneCount = getNumber(phObj, 'undoneCount') ?? 0
         history[key] = { entries, undoneCount }
       }
       // Migrate v1 → v2: add `current` if missing
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const current = (raw['current'] as Record<string, ScopeState>) ?? {}
+      const currentObj = getObject(rawObj, 'current')
+      const current: Record<string, ScopeState> = {}
+      if (currentObj) {
+        for (const [k, v] of Object.entries(currentObj)) {
+          if (isRecord(v)) {
+            current[k] = { installs: getStringArray(v, 'installs') }
+          }
+        }
+      }
       return { version: 2 as const, current, history }
     } catch {
       return DEFAULT_STATE
@@ -632,11 +681,11 @@ export const readFrontmatter = (skillDir: string) =>
 
 // ── Budget ─────────────────────────────────────────────────────────
 
-/** Claude Code's budget algorithm: [name, desc, whenToUse].join(" ").length / 4 */
-export const estimateBudget = (fm: SkillFrontmatter): number => {
+/** Estimate character cost of a skill's metadata (name + description + whenToUse). */
+export const estimateCharCost = (fm: SkillFrontmatter): number => {
   const parts = [fm.name, fm.description]
   if (fm.whenToUse) parts.push(fm.whenToUse)
-  return Math.ceil(parts.join(' ').length / 4)
+  return parts.join(' ').length
 }
 
 // ── Library operations ─────────────────────────────────────────────
@@ -664,8 +713,8 @@ export const libraryExists = (scope?: Scope) =>
 export const getNodeType = (libraryPath: string) =>
   Effect.gen(function* () {
     const hasSkillMd = yield* Effect.tryPromise(async () => {
-      const stat = await lstat(path.join(libraryPath, 'SKILL.md'))
-      return stat.isFile()
+      const fileStat = await lstat(path.join(libraryPath, 'SKILL.md'))
+      return fileStat.isFile()
     }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
     const entries = yield* Effect.tryPromise(() => readdir(libraryPath)).pipe(
@@ -675,10 +724,10 @@ export const getNodeType = (libraryPath: string) =>
     let hasSubdirs = false
     for (const entry of entries) {
       const entryPath = path.join(libraryPath, entry)
-      const stat = yield* Effect.tryPromise(() => lstat(entryPath)).pipe(
+      const entryStat = yield* Effect.tryPromise(() => lstat(entryPath)).pipe(
         Effect.catchAll(() => Effect.succeed(null)),
       )
-      if (stat?.isDirectory()) {
+      if (entryStat?.isDirectory()) {
         hasSubdirs = true
         break
       }
@@ -705,8 +754,8 @@ export const resolveTarget = (colonName: string, scope: Scope = 'project') =>
       const libScope: Scope = libDir === LIBRARY_DIR ? 'user' : 'project'
 
       const exists = yield* Effect.tryPromise(async () => {
-        const stat = await lstat(libraryPath)
-        return stat.isDirectory()
+        const entryStat = await lstat(libraryPath)
+        return entryStat.isDirectory()
       }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
       if (!exists) continue
@@ -778,7 +827,7 @@ export const resolveTarget = (colonName: string, scope: Scope = 'project') =>
 export const resolveLeaves = (
   relPath: string,
   libDir: string = LIBRARY_DIR,
-): Effect.Effect<SkillInfo[], never, never> =>
+): Effect.Effect<SkillInfo[]> =>
   Effect.gen(function* () {
     const absPath = path.join(libDir, relPath)
     const libScope: Scope = libDir === LIBRARY_DIR ? 'user' : 'project'
@@ -790,10 +839,10 @@ export const resolveLeaves = (
 
     for (const entry of entries.sort()) {
       const entryPath = path.join(absPath, entry)
-      const stat = yield* Effect.tryPromise(() => lstat(entryPath)).pipe(
+      const entryStat = yield* Effect.tryPromise(() => lstat(entryPath)).pipe(
         Effect.catchAll(() => Effect.succeed(null)),
       )
-      if (!stat?.isDirectory()) continue
+      if (!entryStat?.isDirectory()) continue
 
       const childRelPath = path.join(relPath, entry)
       const childColonName = pathToColon(childRelPath)
@@ -863,12 +912,12 @@ export const listOutfit = (scope: Scope) =>
     const results: OutfitEntry[] = []
     for (const name of entries.sort()) {
       const entryPath = path.join(dir, name)
-      const stat = yield* Effect.tryPromise(() => lstat(entryPath)).pipe(
+      const entryStat = yield* Effect.tryPromise(() => lstat(entryPath)).pipe(
         Effect.catchAll(() => Effect.succeed(null)),
       )
-      if (!stat) continue
+      if (!entryStat) continue
 
-      if (stat.isSymbolicLink()) {
+      if (entryStat.isSymbolicLink()) {
         const target = yield* Effect.tryPromise(() => readlink(entryPath)).pipe(
           Effect.catchAll(() => Effect.succeed('')),
         )
@@ -881,7 +930,7 @@ export const listOutfit = (scope: Scope) =>
             symlinkTarget: target,
           }),
         )
-      } else if (stat.isDirectory()) {
+      } else if (entryStat.isDirectory()) {
         results.push(OutfitEntry.make({ name, dir: entryPath, commitment: 'core', scope }))
       }
     }
@@ -944,8 +993,8 @@ export const detectGeneratedRouters = (scope: Scope) =>
       for (const libDir of librarySearchOrder(scope)) {
         const libraryPath = path.join(libDir, entry.name)
         const exists = yield* Effect.tryPromise(async () => {
-          const stat = await lstat(libraryPath)
-          return stat.isDirectory()
+          const entryStat = await lstat(libraryPath)
+          return entryStat.isDirectory()
         }).pipe(Effect.catchAll(() => Effect.succeed(false)))
         if (exists) {
           const nodeType = yield* getNodeType(libraryPath)
@@ -1009,13 +1058,15 @@ export const restoreSnapshot = (
         for (const libDir of librarySearchOrder(scope)) {
           const libPath = path.join(libDir, libRelPath)
           const libExists = yield* Effect.tryPromise(async () => {
-            const stat = await lstat(libPath)
-            return stat.isDirectory()
+            const entryStat = await lstat(libPath)
+            return entryStat.isDirectory()
           }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
           if (libExists) {
             yield* Effect.tryPromise(() => symlink(libPath, entryPath)).pipe(
-              Effect.catchAll((err) => Console.error(`  warn: could not restore ${name}: ${err}`)),
+              Effect.catchAll((err) =>
+                Console.error(`  warn: could not restore ${name}: ${String(err)}`),
+              ),
             )
             restored = true
             break
@@ -1040,8 +1091,8 @@ export const restoreSnapshot = (
         for (const libDir of librarySearchOrder(scope)) {
           const libPath = path.join(libDir, router)
           const libExists = yield* Effect.tryPromise(async () => {
-            const stat = await lstat(libPath)
-            return stat.isDirectory()
+            const entryStat = await lstat(libPath)
+            return entryStat.isDirectory()
           }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
           if (libExists) {
@@ -1203,9 +1254,11 @@ export const readGitignoreEntries = (projectRoot: string) =>
 export const printTable = (rows: readonly (readonly string[])[]) =>
   Effect.gen(function* () {
     if (rows.length === 0) return
-    const widths = rows[0]!.map((_, i) => Math.max(...rows.map((r) => (r[i] ?? '').length)))
+    const firstRow = rows[0]
+    if (!firstRow) return
+    const widths = firstRow.map((_, i) => Math.max(...rows.map((r) => (r[i] ?? '').length)))
     for (const row of rows) {
-      const line = row.map((cell, i) => cell.padEnd(widths[i]!)).join('  ')
+      const line = row.map((cell, i) => cell.padEnd(widths[i] ?? 0)).join('  ')
       yield* Console.log(line)
     }
   })

@@ -12,7 +12,7 @@
  */
 
 import type { TranscriptEntry, AssistantEntry, UserEntry, Usage } from './transcript-schema.js'
-import { decodeToolInput, type SkillInput } from './transcript-schema.js'
+import { decodeToolInput } from './transcript-schema.js'
 
 // -----------------------------------------------------------------------------
 // Types
@@ -141,12 +141,12 @@ const extractSkillFromUser = (entry: UserEntry, previousSkill: string | null): S
 
   // Pattern 1: "Base directory for this skill:" in message content
   const baseDirMatch = text.match(/Base directory for this skill:\s*([^\n]+)/)
-  if (baseDirMatch) {
-    const path = baseDirMatch[1]!.trim()
-    const parts = path.split('/')
+  if (baseDirMatch?.[1]) {
+    const dirPath = baseDirMatch[1].trim()
+    const parts = dirPath.split('/')
     const skillIndex = parts.findIndex((p) => p === 'skills')
-    if (skillIndex !== -1 && skillIndex < parts.length - 1) {
-      const skillName = parts[skillIndex + 1]!
+    const skillName = skillIndex !== -1 ? parts[skillIndex + 1] : undefined
+    if (skillName) {
       return {
         name: skillName,
         isInitial: previousSkill === null,
@@ -157,8 +157,8 @@ const extractSkillFromUser = (entry: UserEntry, previousSkill: string | null): S
 
   // Pattern 2: Skill invocation markers like "### Skill: foo"
   const skillHeaderMatch = text.match(/### Skill:\s*(\S+)/)
-  if (skillHeaderMatch) {
-    const skillName = skillHeaderMatch[1]!
+  if (skillHeaderMatch?.[1]) {
+    const skillName = skillHeaderMatch[1]
     return {
       name: skillName,
       isInitial: previousSkill === null,
@@ -174,8 +174,12 @@ const extractSkillFromTool = (tools: string[], entry: AssistantEntry): string | 
 
   for (const block of entry.message.content) {
     if (block.type === 'tool_use' && block.name === 'Skill') {
-      const input = decodeToolInput(block) as SkillInput
-      return input.skill ?? null
+      const input = decodeToolInput(block)
+      if (typeof input === 'object' && input !== null && 'skill' in input) {
+        const skillVal = (input as Record<string, unknown>)['skill']
+        return typeof skillVal === 'string' ? skillVal : null
+      }
+      return null
     }
   }
   return null
@@ -232,7 +236,8 @@ export const analyzeTranscript = (entries: TranscriptEntry[]): AnalyzedTranscrip
   const requestTokens = new Map<string, RequestData>()
 
   for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i]!
+    const entry = entries[i]
+    if (!entry) continue
     if (entry.type !== 'assistant') continue
 
     // TS narrows entry to AssistantEntry after the type guard above
@@ -247,9 +252,9 @@ export const analyzeTranscript = (entries: TranscriptEntry[]): AnalyzedTranscrip
     const existing = requestTokens.get(requestId)
     if (existing) {
       if (usage) {
-        existing.totalInputTokens += usage.input_tokens ?? 0
+        existing.totalInputTokens += usage.input_tokens
         existing.totalCacheCreationTokens += usage.cache_creation_input_tokens ?? 0
-        existing.totalOutputTokens += usage.output_tokens ?? 0
+        existing.totalOutputTokens += usage.output_tokens
         if ((usage.cache_read_input_tokens ?? 0) > 0) {
           existing.cacheHit = true
         }
@@ -286,7 +291,8 @@ export const analyzeTranscript = (entries: TranscriptEntry[]): AnalyzedTranscrip
   const seenRequestIds = new Set<string>()
 
   for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i]!
+    const entry = entries[i]
+    if (!entry) continue
     const timestamp = parseTimestamp(entry)
 
     if (timestamp && !startTime) {

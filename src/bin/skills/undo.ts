@@ -27,7 +27,8 @@ export const skillsUndo = (n: number, scope: Lib.Scope) =>
 
     // Process entries from most recent to oldest
     for (let i = activeCount - 1; i >= activeCount - undoCount; i--) {
-      const entry = history.entries[i]!
+      const entry = history.entries[i]
+      if (!entry) continue
       yield* undoEntry(entry, scope)
     }
 

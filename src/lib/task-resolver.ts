@@ -118,6 +118,7 @@ export const discoverTaskLists = async (options: ResolveOptions = {}): Promise<T
 
     let stats
     try {
+      // eslint-disable-next-line no-await-in-loop -- sequential directory scan
       stats = await stat(entryPath)
     } catch {
       continue
@@ -134,6 +135,7 @@ export const discoverTaskLists = async (options: ResolveOptions = {}): Promise<T
     // Count task JSON files
     let taskCount = 0
     try {
+      // eslint-disable-next-line no-await-in-loop -- sequential directory scan
       const files = await readdir(entryPath)
       taskCount = files.filter((f) => f.endsWith('.json')).length
     } catch {
@@ -297,8 +299,12 @@ const resolveBySubject = (lists: TaskListInfo[], query: string) =>
         const filePath = join(list.path, file)
         const subject = yield* Effect.promise(async () => {
           try {
-            const content = await Bun.file(filePath).json()
-            return (content as { subject?: string }).subject ?? ''
+            const content: unknown = await Bun.file(filePath).json()
+            if (typeof content === 'object' && content !== null && 'subject' in content) {
+              const subj = (content as Record<string, unknown>)['subject']
+              return typeof subj === 'string' ? subj : ''
+            }
+            return ''
           } catch {
             return ''
           }

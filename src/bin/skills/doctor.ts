@@ -69,7 +69,7 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
         if (f.fix) {
           const desc = yield* f.fix().pipe(
             Effect.catchAll((err) => {
-              return Console.error(`  fix failed: ${f.message} — ${err}`).pipe(
+              return Console.error(`  fix failed: ${f.message} — ${String(err)}`).pipe(
                 Effect.map(() => null as string | null),
               )
             }),

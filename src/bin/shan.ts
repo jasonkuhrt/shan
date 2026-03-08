@@ -129,7 +129,8 @@ const parseArgs = (args: string[]) => {
   const positional: string[] = []
 
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!
+    const arg = args[i]
+    if (!arg) continue
     if (arg === '--raw') flags.raw = true
     else if (arg === '--all') flags.all = true
     else if (arg === '--md') flags.md = true
@@ -138,12 +139,12 @@ const parseArgs = (args: string[]) => {
     else if (arg === '--global') flags.global = true
     else if (arg === '--no-fix') flags.noFix = true
     else if (arg === '--scope' && i + 1 < args.length) {
-      flags.scope = args[++i]!
+      flags.scope = args[++i] ?? ''
     } else if (arg.startsWith('--scope=')) {
       flags.scope = arg.slice(8)
     } else if (arg.startsWith('--show=')) flags.show.push(arg.slice(7))
     else if (arg === '--show' && i + 1 < args.length) {
-      flags.show.push(args[++i]!)
+      flags.show.push(args[++i] ?? '')
     } else positional.push(arg)
   }
 
@@ -200,19 +201,16 @@ const program = Effect.gen(function* () {
     } else if (command === 'off') {
       yield* skillsOff(positional[0] ?? '', { scope, strict: flags.strict })
     } else if (command === 'move') {
-      const axis = positional[0] as MoveAxis | undefined
-      const direction = positional[1] as MoveDirection | undefined
+      const axisInput = positional[0]
+      const directionInput = positional[1]
       const moveTargets = positional[2] ?? ''
-      if (
-        !axis ||
-        !direction ||
-        !['scope', 'commitment'].includes(axis) ||
-        !['up', 'down'].includes(direction)
-      ) {
+      const isAxis = (s: string): s is MoveAxis => s === 'scope' || s === 'commitment'
+      const isDirection = (s: string): s is MoveDirection => s === 'up' || s === 'down'
+      if (!axisInput || !directionInput || !isAxis(axisInput) || !isDirection(directionInput)) {
         yield* Console.error('Usage: shan skills move <scope|commitment> <up|down> <targets>')
         return yield* Effect.fail(new Error('Missing targets'))
       }
-      yield* skillsMove(axis, direction, moveTargets, { scope, strict: flags.strict })
+      yield* skillsMove(axisInput, directionInput, moveTargets, { scope, strict: flags.strict })
     } else if (command === 'list' || !command) {
       yield* skillsList()
     } else if (command === 'history') {
@@ -247,9 +245,15 @@ const QUIET_ERRORS = new Set([
   'Some targets failed',
 ])
 
-Effect.runPromise(program).catch((err: unknown) => {
-  if (err instanceof Error && !QUIET_ERRORS.has(err.message)) {
-    console.error(err)
+const run = async () => {
+  try {
+    await Effect.runPromise(program)
+  } catch (err: unknown) {
+    if (err instanceof Error && !QUIET_ERRORS.has(err.message)) {
+      console.error(err)
+    }
+    process.exit(1)
   }
-  process.exit(1)
-})
+}
+
+void run()

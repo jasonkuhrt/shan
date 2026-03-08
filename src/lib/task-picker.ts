@@ -84,10 +84,12 @@ const loadTasks = async (list: TaskListInfo): Promise<LoadedTask[]> => {
   for (const file of files) {
     const filePath = join(list.path, file)
     try {
-      const raw = await Bun.file(filePath).json()
+      // eslint-disable-next-line no-await-in-loop -- sequential file reads
+      const raw: unknown = await Bun.file(filePath).json()
       const decoded = Schema.decodeUnknownOption(Task)(raw)
       if (decoded._tag === 'None') continue
 
+      // eslint-disable-next-line no-await-in-loop -- sequential file reads, parallelization would change error handling
       const mtime = (await stat(filePath)).mtime
 
       const task = decoded.value
@@ -192,7 +194,7 @@ export const pickTask = (options: PickTaskOptions = {}) =>
       | { kind: 'list'; list: TaskListInfo }
       | { kind: 'task'; task: LoadedTask; list: TaskListInfo }
 
-    const selectOptions: { value: OptionValue; label: string; hint?: string }[] = []
+    const selectOptions: Clack.Option<OptionValue>[] = []
 
     for (const group of groups) {
       // List-level entry (selectable — selects the whole list)
@@ -212,9 +214,9 @@ export const pickTask = (options: PickTaskOptions = {}) =>
     }
 
     const selected = yield* Effect.promise(() =>
-      Clack.select({
+      Clack.select<OptionValue>({
         message: 'Select a task or list:',
-        options: selectOptions as any,
+        options: selectOptions,
         maxItems: 15,
       }),
     )
@@ -223,7 +225,7 @@ export const pickTask = (options: PickTaskOptions = {}) =>
       return yield* Effect.fail(new Error('Selection cancelled'))
     }
 
-    const choice = selected as OptionValue
+    const choice = selected
 
     if (choice.kind === 'list') {
       return {

@@ -55,14 +55,12 @@ export const collapseIntoTurns = (entries: TranscriptEntry[]): Turn[] => {
       continue
     }
 
-    if (entry.type === 'assistant') {
-      if (current?.type === 'claude') {
-        current.entries.push(entry)
-      } else {
-        if (current) turns.push(current)
-        current = { type: 'claude', entries: [entry] }
-      }
-      continue
+    // entry.type is 'assistant' at this point (user and summary handled above)
+    if (current?.type === 'claude') {
+      current.entries.push(entry)
+    } else {
+      if (current) turns.push(current)
+      current = { type: 'claude', entries: [entry] }
     }
   }
 

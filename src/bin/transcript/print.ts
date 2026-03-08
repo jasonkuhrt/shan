@@ -12,20 +12,7 @@ import type {
   ToolUseBlock,
   ToolResultBlock,
 } from '../../lib/transcript-schema.js'
-import {
-  isKnownTool,
-  decodeToolInput,
-  type ReadInput,
-  type WriteInput,
-  type EditInput,
-  type BashInput,
-  type GrepInput,
-  type GlobInput,
-  type WebSearchInput,
-  type WebFetchInput,
-  type TaskInput,
-  type LSPInput,
-} from '../../lib/transcript-schema.js'
+import { isKnownTool, decodeToolInput } from '../../lib/transcript-schema.js'
 import { loadTranscript, ensureOutputDir, writeOutput } from '../../lib/transcript-io.js'
 import { collapseIntoTurns, buildToolResultMap, type Turn } from '../../lib/transcript-turns.js'
 import type { PickSessionOptions } from '../../lib/session-picker.js'
@@ -37,6 +24,8 @@ import type { PickSessionOptions } from '../../lib/session-picker.js'
 const LAYERS = ['results', 'diffs', 'thinking', 'trace'] as const
 type Layer = (typeof LAYERS)[number]
 
+const isLayer = (s: string): s is Layer => (LAYERS as readonly string[]).includes(s)
+
 const parseShowFlags = (showArgs: string[]): Set<Layer> => {
   const layers = new Set<Layer>()
   for (const arg of showArgs) {
@@ -44,12 +33,26 @@ const parseShowFlags = (showArgs: string[]): Set<Layer> => {
       const trimmed = part.trim()
       if (trimmed === 'all') {
         for (const l of LAYERS) layers.add(l)
-      } else if (LAYERS.includes(trimmed as Layer)) {
-        layers.add(trimmed as Layer)
+      } else if (isLayer(trimmed)) {
+        layers.add(trimmed)
       }
     }
   }
   return layers
+}
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+/** Convert unknown decoded tool input to a Record for property access. */
+const toRecord = (raw: unknown): Record<string, unknown> => {
+  if (typeof raw !== 'object' || raw === null) return {}
+  const result: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    result[k] = v
+  }
+  return result
 }
 
 // -----------------------------------------------------------------------------
@@ -62,30 +65,33 @@ const truncate = (s: string, max: number): string =>
 const summarizeToolCall = (tool: ToolUseBlock): string => {
   if (!isKnownTool(tool.name)) return `**${tool.name}**`
 
-  const input = decodeToolInput(tool)
+  // decodeToolInput validates the schema — safe to use typed accessors
+  const inputObj = toRecord(decodeToolInput(tool))
+  const get = (key: string): string => {
+    const val = inputObj[key]
+    return typeof val === 'string' ? val : ''
+  }
   switch (tool.name) {
     case 'Read':
-      return `**Read** \`${(input as ReadInput).file_path}\``
+      return `**Read** \`${get('file_path')}\``
     case 'Write':
-      return `**Wrote** \`${(input as WriteInput).file_path}\``
+      return `**Wrote** \`${get('file_path')}\``
     case 'Edit':
-      return `**Edited** \`${(input as EditInput).file_path}\``
+      return `**Edited** \`${get('file_path')}\``
     case 'Bash':
-      return `**Ran** \`${truncate((input as BashInput).command, 80)}\``
+      return `**Ran** \`${truncate(get('command'), 80)}\``
     case 'Grep':
-      return `**Searched** for \`${truncate((input as GrepInput).pattern, 60)}\``
+      return `**Searched** for \`${truncate(get('pattern'), 60)}\``
     case 'Glob':
-      return `**Searched** for \`${truncate((input as GlobInput).pattern, 60)}\``
+      return `**Searched** for \`${truncate(get('pattern'), 60)}\``
     case 'WebSearch':
-      return `**Web search** \`${truncate((input as WebSearchInput).query, 60)}\``
+      return `**Web search** \`${truncate(get('query'), 60)}\``
     case 'WebFetch':
-      return `**Fetched** \`${truncate((input as WebFetchInput).url, 80)}\``
+      return `**Fetched** \`${truncate(get('url'), 80)}\``
     case 'Task':
-      return `**Subagent** — ${truncate((input as TaskInput).description ?? '', 60)}`
-    case 'LSP': {
-      const lsp = input as LSPInput
-      return `**LSP** \`${lsp.operation}\` on \`${lsp.filePath}\``
-    }
+      return `**Subagent** — ${truncate(get('description'), 60)}`
+    case 'LSP':
+      return `**LSP** \`${get('operation')}\` on \`${get('filePath')}\``
     case 'Skill':
     case 'NotebookEdit':
       return `**${tool.name}**`
@@ -99,9 +105,9 @@ const summarizeToolCall = (tool: ToolUseBlock): string => {
 const extractResultText = (content: string | readonly unknown[]): string | null => {
   if (typeof content === 'string') return content
   for (const item of content) {
-    if (typeof item === 'object' && item !== null && 'type' in item) {
-      const typed = item as { type: string; text?: string }
-      if (typed.type === 'text' && typed.text) return typed.text
+    if (typeof item === 'object' && item !== null && 'type' in item && 'text' in item) {
+      const typed = item as Record<string, unknown>
+      if (typed['type'] === 'text' && typeof typed['text'] === 'string') return typed['text']
     }
   }
   return null
@@ -142,13 +148,15 @@ const renderAssistantContent = (
 
       // --show diffs: expand Edit calls
       if (layers.has('diffs') && block.name === 'Edit') {
-        const input = decodeToolInput(block) as EditInput
-        if (input.old_string && input.new_string) {
+        const editObj = toRecord(decodeToolInput(block))
+        const oldStr = typeof editObj['old_string'] === 'string' ? editObj['old_string'] : null
+        const newStr = typeof editObj['new_string'] === 'string' ? editObj['new_string'] : null
+        if (oldStr && newStr) {
           lines.push('  ```diff')
-          for (const l of input.old_string.split('\n')) {
+          for (const l of oldStr.split('\n')) {
             lines.push(`  - ${l}`)
           }
-          for (const l of input.new_string.split('\n')) {
+          for (const l of newStr.split('\n')) {
             lines.push(`  + ${l}`)
           }
           lines.push('  ```')
@@ -191,8 +199,8 @@ const renderTurn = (turn: Turn, layers: Set<Layer>, index: number): string[] => 
   const lines: string[] = []
 
   if (turn.type === 'user') {
-    const entry = turn.entries[0]!
-    if (entry.type !== 'user') return lines
+    const entry = turn.entries[0]
+    if (entry?.type !== 'user') return lines
     const heading = layers.has('trace') ? `## You [${String(index).padStart(3, '0')}]` : '## You'
     lines.push(heading, '')
     lines.push(...renderUserContent(entry))

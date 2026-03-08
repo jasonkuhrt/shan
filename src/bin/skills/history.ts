@@ -19,10 +19,11 @@ export const skillsHistory = (scope: Lib.Scope) =>
 
     // Table header
     yield* Console.log(`#   Op     Targets               Scope      Time`)
-    yield* Console.log(`${'─'.repeat(60)}`)
+    yield* Console.log('─'.repeat(60))
 
     for (let i = 0; i < history.entries.length; i++) {
-      const entry = history.entries[i]!
+      const entry = history.entries[i]
+      if (!entry) continue
       const isUndone = i >= activeCount
       const num = String(i + 1).padEnd(4)
       const opLabel: Record<string, string> = {

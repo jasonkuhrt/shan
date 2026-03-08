@@ -8,7 +8,21 @@
 import { Console, Effect } from 'effect'
 import * as Lib from '../../lib/skill-library.js'
 
-const BUDGET_LIMIT = 15_000
+const DEFAULT_CHAR_BUDGET = 16_000
+
+/**
+ * Claude Code's skill character budget.
+ * Override: SLASH_COMMAND_TOOL_CHAR_BUDGET (in characters).
+ * Default: 2% of context window, fallback 16,000 chars.
+ */
+const getCharBudget = (): number => {
+  const envVal = process.env['SLASH_COMMAND_TOOL_CHAR_BUDGET']
+  if (envVal) {
+    const parsed = Number(envVal)
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed
+  }
+  return DEFAULT_CHAR_BUDGET
+}
 
 interface GridItem {
   readonly name: string
@@ -43,9 +57,9 @@ export const skillsList = () =>
         for (const entry of entries) {
           const targetDir = entry.symlinkTarget ?? entry.dir
           const fm = yield* Lib.readFrontmatter(targetDir)
-          const tokens = fm && !fm.disableModelInvocation ? Lib.estimateBudget(fm) : 0
+          const chars = fm && !fm.disableModelInvocation ? Lib.estimateCharCost(fm) : 0
           const colonName = fm?.name ?? Lib.pathToColon(Lib.unflattenName(entry.name))
-          items.push({ name: colonName, detail: tokens > 0 ? String(tokens) : '--' })
+          items.push({ name: colonName, detail: chars > 0 ? String(chars) : '--' })
         }
         return items
       })
@@ -81,26 +95,65 @@ export const skillsList = () =>
     // Off
     if (libraryOff.length > 0) {
       yield* Console.log('Off:')
-      yield* printGrid(
-        libraryOff.map((s) => ({ name: s.colonName })),
-        '○',
-      )
+      yield* printGrouped(libraryOff.map((s) => s.colonName))
       yield* Console.log('')
     }
 
     // Budget summary
-    let totalBudget = 0
+    let totalChars = 0
     for (const entry of [...userOutfit, ...projectOutfit]) {
       const targetDir = entry.symlinkTarget ?? entry.dir
       const fm = yield* Lib.readFrontmatter(targetDir)
       if (fm && !fm.disableModelInvocation) {
-        totalBudget += Lib.estimateBudget(fm)
+        totalChars += Lib.estimateCharCost(fm)
       }
     }
-    const pct = Math.round((totalBudget / BUDGET_LIMIT) * 100)
+    const charBudget = getCharBudget()
+    const pct = Math.round((totalChars / charBudget) * 100)
+    const isCustom = Boolean(process.env['SLASH_COMMAND_TOOL_CHAR_BUDGET'])
     yield* Console.log(
-      `Budget: ${totalBudget.toLocaleString()} / ${BUDGET_LIMIT.toLocaleString()} tokens (${pct}%)`,
+      `Budget: ${totalChars.toLocaleString()} / ${charBudget.toLocaleString()} chars (${pct}%)`,
     )
+    yield* Console.log(
+      isCustom
+        ? `  via SLASH_COMMAND_TOOL_CHAR_BUDGET`
+        : `  default ${DEFAULT_CHAR_BUDGET.toLocaleString()} · override with SLASH_COMMAND_TOOL_CHAR_BUDGET`,
+    )
+  })
+
+/** Print names grouped by namespace prefix, standalone items listed individually. */
+const printGrouped = (colonNames: readonly string[]) =>
+  Effect.gen(function* () {
+    if (colonNames.length === 0) return
+
+    // Partition into namespaced and standalone
+    const groups = new Map<string, string[]>()
+    const standalone: string[] = []
+    for (const name of colonNames) {
+      const idx = name.indexOf(':')
+      if (idx === -1) {
+        standalone.push(name)
+      } else {
+        const ns = name.slice(0, idx)
+        const child = name.slice(idx + 1)
+        let children = groups.get(ns)
+        if (!children) {
+          children = []
+          groups.set(ns, children)
+        }
+        children.push(child)
+      }
+    }
+
+    // Print namespaced groups: "  ns: a, b, c"
+    for (const [ns, children] of groups) {
+      yield* Console.log(`  ${ns}: ${children.join(', ')}`)
+    }
+
+    // Print standalone items
+    for (const name of standalone) {
+      yield* Console.log(`  ${name}`)
+    }
   })
 
 /** Auto-sizing grid that fits columns to terminal width. */
@@ -110,7 +163,7 @@ const printGrid = (items: readonly GridItem[], bullet = '●') =>
     const termWidth = process.stdout.columns || 80
 
     const maxName = Math.max(...items.map((it) => it.name.length))
-    const hasDetail = items.some((it) => it.detail !== undefined && it.detail !== null)
+    const hasDetail = items.some((it) => it.detail !== undefined)
     const maxDetail = hasDetail ? Math.max(...items.map((it) => (it.detail ?? '').length)) : 0
 
     // "  ● " = 4 chars prefix, then padded name, then "  " + right-aligned detail

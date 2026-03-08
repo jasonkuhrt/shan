@@ -13,11 +13,12 @@ export const parseTranscriptEntries = (text: string) =>
     const entries: TranscriptEntry[] = []
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]!.trim()
-      if (!line) continue
+      const line = lines[i]
+      if (!line?.trim()) continue
+      const trimmed = line.trim()
 
       const raw = yield* Effect.try({
-        try: () => JSON.parse(line) as unknown,
+        try: () => JSON.parse(trimmed) as unknown,
         catch: () => new Error(`Invalid JSON at line ${i + 1}`),
       })
 
@@ -25,8 +26,7 @@ export const parseTranscriptEntries = (text: string) =>
       if (Option.isSome(decoded)) {
         entries.push(decoded.value)
       } else {
-        const rawObj = raw as { type?: string }
-        yield* Console.warn(`Unknown entry type "${rawObj.type}" at line ${i + 1}`)
+        yield* Console.warn(`Unknown entry type at line ${i + 1}`)
       }
     }
 
