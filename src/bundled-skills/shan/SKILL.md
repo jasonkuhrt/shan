@@ -18,6 +18,28 @@ bun x @jasonkuhrt/shan $ARGUMENTS
 
 ## Commands
 
+### `transcript print [target]`
+
+Render a transcript as a readable conversation log — user messages, Claude's prose, tool calls as one-liners.
+
+**Arguments:**
+
+| Argument   | Description                                                                    |
+| ---------- | ------------------------------------------------------------------------------ |
+| `[target]` | Session ID/prefix, file path, or omit for interactive picker.                  |
+| `--show`   | Add detail layers: `results`, `diffs`, `thinking`, `trace`, `all` (CSV list).  |
+
+**Output:** `.claude/transcripts/<session-id>.print.md`
+
+**Examples:**
+
+```
+/shan transcript print                         # current session
+/shan transcript print dc8ffe42                # specific session
+/shan transcript print --show diffs,results    # with edit diffs and tool results
+/shan transcript print --show all              # everything
+```
+
 ### `transcript dump [session-id]`
 
 Convert JSONL transcripts to navigable Markdown with columnar headings for editor outline navigation.
@@ -47,6 +69,25 @@ Headings use monospace columns with underscore padding for editor outline alignm
 # `002` `01/25/2026 22:45` `progress_____________` `SessionStart:clear____________`
 
 # `003` `01/25/2026 22:46` `user_________________` `sync__________________________`
+```
+
+### `transcript analyze [target]`
+
+Visualize context window consumption and request patterns. Produces two stacked charts (elapsed time + tokens), dimension tracks (type, skill, tool, cache, model, files, trunc, error, alert, top), a top consumers table, summary, and legend.
+
+**Arguments:**
+
+| Argument   | Description                                                   |
+| ---------- | ------------------------------------------------------------- |
+| `[target]` | Session ID/prefix, file path, or omit for interactive picker. |
+
+**Output:** `.claude/transcripts/<session-id>.viz.txt`
+
+**Examples:**
+
+```
+/shan transcript analyze                 # current session
+/shan transcript analyze dc8ffe42        # specific session
 ```
 
 ### `task dump [target]`
@@ -171,6 +212,3 @@ shan skills doctor                             # detect + auto-fix
 shan skills doctor --no-fix                    # report only
 ```
 
-### `skills migrate [--execute]`
-
-Migrate from flat `skill-inventory/` to hierarchical `skills-library/`. Dry-run by default.
