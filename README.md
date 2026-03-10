@@ -16,7 +16,6 @@ The repo is now the product. Dotfiles can shell out to a globally installed `sha
 git clone git@github.com:jasonkuhrt/shan.git
 cd shan
 just install
-just hooks-install
 ```
 
 Optional global registration for `bun x @jasonkuhrt/shan`:
