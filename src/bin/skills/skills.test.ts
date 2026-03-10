@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { lstat, mkdir, mkdtemp, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 
@@ -239,6 +239,115 @@ describe('skills on/off project scope', () => {
       expect(result.exitCode).toBe(0)
 
       const exists = await lstat(path.join(env.projectOutfit, 'projoff')).catch(() => null)
+      expect(exists).toBeNull()
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+// ── cross-scope guard ────────────────────────────────────────────────
+
+describe('cross-scope guard', () => {
+  test('on at project scope should NOT activate a skill that only exists in user library', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Skill exists in user library but is NOT activated at user scope
+      await env.addUserLibrarySkill('align')
+      await env.addUserLibrarySkill('align:go')
+      await env.addUserLibrarySkill('align:once')
+
+      // Attempt to turn it on at project scope (the default)
+      const result = await env.run(['skills', 'on', 'align'])
+
+      // This should fail — the skill lives in user library, not project library.
+      // Activating user-library skills at project scope without them being on at
+      // user scope is a scope-crossing violation.
+      expect(result.exitCode).not.toBe(0)
+
+      // Verify no symlinks were created in the project outfit
+      const alignExists = await lstat(path.join(env.projectOutfit, 'align')).catch(() => null)
+      const alignGoExists = await lstat(path.join(env.projectOutfit, 'align_go')).catch(() => null)
+      const alignOnceExists = await lstat(path.join(env.projectOutfit, 'align_once')).catch(() => null)
+      expect(alignExists).toBeNull()
+      expect(alignGoExists).toBeNull()
+      expect(alignOnceExists).toBeNull()
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('on at project scope SHOULD work for skills in project library', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Skill exists in PROJECT library — this is the valid path
+      await env.addProjectLibrarySkill('align')
+      await env.addProjectLibrarySkill('align:go')
+
+      const result = await env.run(['skills', 'on', 'align'])
+      expect(result.exitCode).toBe(0)
+
+      // Symlinks should be created in project outfit
+      const alignLink = await lstat(path.join(env.projectOutfit, 'align'))
+      expect(alignLink.isSymbolicLink()).toBe(true)
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('on at project scope rejects user-library skills even if active at user scope', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Skill in user library AND turned on at user scope
+      await env.addUserLibrarySkill('shared')
+      await env.run(['skills', 'on', 'shared', '--scope', 'user'])
+
+      // Activating at project scope should fail — resolveTarget(strict=true)
+      // only searches the project library, so it's simply "not found".
+      const result = await env.run(['skills', 'on', 'shared'])
+      expect(result.stdout).toContain('not found in library')
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+// ── off cross-scope guard ────────────────────────────────────────────
+
+describe('off cross-scope guard', () => {
+  test('off at project scope should NOT remove user-scope symlinks', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Install a skill at user scope
+      await env.addUserLibrarySkill('gel')
+      const onResult = await env.run(['skills', 'on', 'gel', '--scope', 'user'])
+      expect(onResult.exitCode).toBe(0)
+
+      // Verify it's on at user scope
+      const linkBefore = await lstat(path.join(env.userOutfit, 'gel'))
+      expect(linkBefore.isSymbolicLink()).toBe(true)
+
+      // Try to turn it off at project scope (the default)
+      const offResult = await env.run(['skills', 'off', 'gel'])
+
+      // The user-scope symlink should still be intact
+      const linkAfter = await lstat(path.join(env.userOutfit, 'gel'))
+      expect(linkAfter.isSymbolicLink()).toBe(true)
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('off at project scope works for project-scope symlinks', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addProjectLibrarySkill('projgel')
+      await env.run(['skills', 'on', 'projgel'])
+
+      const offResult = await env.run(['skills', 'off', 'projgel'])
+      expect(offResult.exitCode).toBe(0)
+
+      const exists = await lstat(path.join(env.projectOutfit, 'projgel')).catch(() => null)
       expect(exists).toBeNull()
     } finally {
       await env.cleanup()
@@ -598,4 +707,159 @@ describe('CC integration', () => {
     },
     { timeout: 60_000 },
   )
+})
+
+// ── state.current consistency ────────────────────────────────────────
+
+/** Read state.json from the test env's HOME. */
+const readState = async (home: string) => {
+  const statePath = path.join(home, '.claude/shan/state.json')
+  const content = await readFile(statePath, 'utf-8').catch(() => '{}')
+  return JSON.parse(content) as { current?: Record<string, { installs: string[] }> }
+}
+
+/** Get current installs for a scope key from state. Resolves realpath for project keys (macOS /var → /private/var). */
+const getInstalls = async (state: Awaited<ReturnType<typeof readState>>, scopeKey: string): Promise<string[]> => {
+  // Try exact key first
+  if (state.current?.[scopeKey]?.installs) return state.current[scopeKey].installs
+  // Try realpath (macOS /var/folders → /private/var/folders)
+  const resolved = await realpath(scopeKey).catch(() => scopeKey)
+  return state.current?.[resolved]?.installs ?? []
+}
+
+describe('state.current consistency', () => {
+  test('on updates current installs', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('stfoo')
+      await env.run(['skills', 'on', 'stfoo', '--scope', 'user'])
+
+      const state = await readState(env.home)
+      expect(await getInstalls(state, 'global')).toContain('stfoo')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('off updates current installs', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('stbar')
+      await env.run(['skills', 'on', 'stbar', '--scope', 'user'])
+      await env.run(['skills', 'off', 'stbar', '--scope', 'user'])
+
+      const state = await readState(env.home)
+      expect(await getInstalls(state, 'global')).not.toContain('stbar')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('move scope up updates current installs for both scopes', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addProjectLibrarySkill('mvup')
+      await env.run(['skills', 'on', 'mvup'])
+
+      // Before move: should be in project installs
+      const before = await readState(env.home)
+      expect(await getInstalls(before, env.project)).toContain('mvup')
+
+      await env.run(['skills', 'move', 'scope', 'up', 'mvup'])
+
+      // After move: should be in user installs, not project
+      const after = await readState(env.home)
+      expect(await getInstalls(after, 'global')).toContain('mvup')
+      expect(await getInstalls(after, env.project)).not.toContain('mvup')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('move scope down updates current installs for both scopes', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('mvdown')
+      await env.run(['skills', 'on', 'mvdown', '--scope', 'user'])
+
+      const before = await readState(env.home)
+      expect(await getInstalls(before, 'global')).toContain('mvdown')
+
+      await env.run(['skills', 'move', 'scope', 'down', 'mvdown'])
+
+      const after = await readState(env.home)
+      expect(await getInstalls(after, 'global')).not.toContain('mvdown')
+      expect(await getInstalls(after, env.project)).toContain('mvdown')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('undo updates current installs to match restored filesystem', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('undost')
+      await env.run(['skills', 'on', 'undost', '--scope', 'user'])
+
+      const before = await readState(env.home)
+      expect(await getInstalls(before, 'global')).toContain('undost')
+
+      // Undo the on → should remove from installs
+      await env.run(['skills', 'undo', '1', '--scope', 'user'])
+
+      const after = await readState(env.home)
+      expect(await getInstalls(after, 'global')).not.toContain('undost')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('redo updates current installs to match restored filesystem', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('redost')
+      await env.run(['skills', 'on', 'redost', '--scope', 'user'])
+      await env.run(['skills', 'undo', '1', '--scope', 'user'])
+
+      // After undo, should be gone
+      const afterUndo = await readState(env.home)
+      expect(await getInstalls(afterUndo, 'global')).not.toContain('redost')
+
+      // Redo → should be back
+      await env.run(['skills', 'redo', '1', '--scope', 'user'])
+
+      const afterRedo = await readState(env.home)
+      expect(await getInstalls(afterRedo, 'global')).toContain('redost')
+
+      // Filesystem should match
+      const linkExists = await lstat(path.join(env.userOutfit, 'redost')).catch(() => null)
+      expect(linkExists).not.toBeNull()
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('redo does not create duplicate history entries', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('redhist')
+      await env.run(['skills', 'on', 'redhist', '--scope', 'user'])
+      await env.run(['skills', 'undo', '1', '--scope', 'user'])
+
+      const state = await readState(env.home) as Record<string, unknown>
+      const historyBefore = (state as { history?: Record<string, { entries: unknown[] }> })
+        .history?.['global']?.entries.length ?? 0
+
+      await env.run(['skills', 'redo', '1', '--scope', 'user'])
+
+      const stateAfter = await readState(env.home) as Record<string, unknown>
+      const historyAfter = (stateAfter as { history?: Record<string, { entries: unknown[] }> })
+        .history?.['global']?.entries.length ?? 0
+
+      // Redo should NOT add new history entries — it only moves the undo pointer
+      expect(historyAfter).toBe(historyBefore)
+    } finally {
+      await env.cleanup()
+    }
+  })
 })

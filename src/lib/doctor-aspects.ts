@@ -190,20 +190,23 @@ const stateDrift: DoctorAspect = {
                 true,
                 () =>
                   Effect.gen(function* () {
-                    // Try to recreate from library
-                    const libraryDirs = Lib.librarySearchOrder(resolvedScope)
-                    for (const libDir of libraryDirs) {
-                      // Reverse-resolve flat name to library path
-                      const resolved = yield* findLibraryByFlatName(flatName, libDir)
-                      if (resolved) {
-                        yield* Effect.tryPromise(() =>
-                          mkdir(path.dirname(linkPath), { recursive: true }),
-                        )
-                        yield* Effect.tryPromise(() => symlink(resolved, linkPath))
-                        return `restored symlink: ${flatName} (${scopeKey})`
-                      }
+                    // Try to recreate from the scope-appropriate library only.
+                    // Never fall through to another scope's library — that would
+                    // create a cross-scope install.
+                    const libDir =
+                      Lib.scopeLibraryDir(resolvedScope)
+                    const resolved = yield* findLibraryByFlatName(flatName, libDir)
+                    if (resolved) {
+                      yield* Effect.tryPromise(() =>
+                        mkdir(path.dirname(linkPath), { recursive: true }),
+                      )
+                      yield* Effect.tryPromise(() => symlink(resolved, linkPath))
+                      return `restored symlink: ${flatName} (${scopeKey})`
                     }
-                    // Can't recreate — remove from state
+                    // Can't recreate in same scope — actually remove from state
+                    const currentState = yield* Lib.loadState()
+                    const updatedState = Lib.removeCurrentInstall(currentState, resolvedScope, flatName)
+                    yield* Lib.saveState(updatedState)
                     return `removed from state: ${flatName} (${scopeKey})`
                   }),
               ),
@@ -511,16 +514,16 @@ const staleShadow: DoctorAspect = {
 
 const crossScopeInstall: DoctorAspect = {
   name: 'cross-scope-install',
-  description: 'User outfit symlink points into project library',
+  description: 'Outfit symlink crosses scope boundary',
   level: 'error',
   detect: (ctx) =>
     Effect.sync(() => {
       const findings: DoctorFinding[] = []
+
+      // Check user outfit → should only point into user library
       for (const entry of ctx.userOutfit) {
         if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
-        // Check if target is inside any project library (not user library)
         if (entry.symlinkTarget.startsWith(Lib.LIBRARY_DIR)) continue // correct: user → user library
-        // If it starts with a path that looks like a project library, flag it
         if (entry.symlinkTarget.includes('.claude/skills-library/')) {
           const linkPath = path.join(Lib.outfitDir('user'), entry.name)
           findings.push(
@@ -540,6 +543,31 @@ const crossScopeInstall: DoctorAspect = {
           )
         }
       }
+
+      // Check project outfit → should only point into project library
+      for (const entry of ctx.projectOutfit) {
+        if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
+        // If symlink points into user library, it's a cross-scope install
+        if (entry.symlinkTarget.startsWith(Lib.LIBRARY_DIR)) {
+          const linkPath = path.join(ctx.projectOutfitDir, entry.name)
+          findings.push(
+            finding(
+              'cross-scope-install',
+              'error',
+              `[project] ${entry.name} → ${entry.symlinkTarget}`,
+              true,
+              () =>
+                Effect.gen(function* () {
+                  yield* Effect.tryPromise(() => unlink(linkPath)).pipe(
+                    Effect.catchAll(() => Effect.void),
+                  )
+                  return `removed cross-scope symlink: ${entry.name} (project → user library)`
+                }),
+            ),
+          )
+        }
+      }
+
       return findings
     }),
 }
@@ -564,6 +592,9 @@ const newLeaf: DoctorAspect = {
         for (const skill of ctx.library) {
           const flat = Lib.flattenName(skill.libraryRelPath)
           if (installedNames.has(flat)) continue // already installed
+
+          // Skip skills from a different scope's library — never create cross-scope installs
+          if (skill.libraryScope !== outfit.scope) continue
 
           // Check if any parent group prefix is installed
           const parts = flat.split('_')

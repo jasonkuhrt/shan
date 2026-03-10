@@ -3,22 +3,16 @@
  *
  * Restores the outfit to the state after each re-applied operation.
  * For composite MoveOp entries, replays sub-actions in forward order.
+ *
+ * IMPORTANT: Redo replays filesystem mutations directly — it must NOT call
+ * skillsOn/skillsOff because those run full pipelines (including their own
+ * state saves), which would corrupt state when redo saves its own version.
  */
 
 import { Console, Effect } from 'effect'
 import * as path from 'node:path'
-import { cp, mkdir, rename, symlink, unlink } from 'node:fs/promises'
+import { cp, lstat, mkdir, rename, symlink, unlink } from 'node:fs/promises'
 import * as Lib from '../../lib/skill-library.js'
-import { skillsOn } from './on.js'
-import { skillsOff } from './off.js'
-
-/** Check if an entry supports snapshot-based undo/redo. */
-const hasSnapshot = (
-  entry: Lib.HistoryEntry,
-): entry is Lib.HistoryEntry & {
-  readonly snapshot: ReadonlyArray<string>
-  readonly generatedRouters: ReadonlyArray<string>
-} => entry._tag === 'OnOp' || entry._tag === 'OffOp'
 
 export const skillsRedo = (n: number, scope: Lib.Scope) =>
   Effect.gen(function* () {
@@ -42,20 +36,24 @@ export const skillsRedo = (n: number, scope: Lib.Scope) =>
       yield* redoEntry(entry, scope)
     }
 
+    // Rebuild current installs from filesystem after all mutations
+    let updatedState = yield* Lib.syncCurrentInstalls(state, scope)
+
     // Update undo pointer
     history.undoneCount -= redoCount
-    const newState = Lib.setProjectHistory(state, scope, history)
-    yield* Lib.saveState(newState)
+    updatedState = Lib.setProjectHistory(updatedState, scope, history)
+    yield* Lib.saveState(updatedState)
 
     yield* Console.log(`Redone ${redoCount} operation${redoCount > 1 ? 's' : ''}.`)
   })
 
-/** Redo a single history entry. */
+/** Redo a single history entry via direct filesystem replay. */
 const redoEntry = (entry: Lib.HistoryEntry, scope: Lib.Scope): Effect.Effect<void, unknown> => {
-  if (hasSnapshot(entry)) {
-    // For on/off, we need the NEXT entry's snapshot (state after this op)
-    // But since we don't have easy access to it here, replay the operation instead
-    return replayEntry(entry, scope)
+  if (entry._tag === 'OnOp') {
+    return redoOnOp(entry, scope)
+  }
+  if (entry._tag === 'OffOp') {
+    return redoOffOp(entry, scope)
   }
   if (entry._tag === 'MoveOp') {
     return redoMoveOp(entry)
@@ -63,18 +61,59 @@ const redoEntry = (entry: Lib.HistoryEntry, scope: Lib.Scope): Effect.Effect<voi
   return Console.error(`  warn: redo for ${entry._tag} not yet implemented`)
 }
 
-/** Replay a history entry by re-executing its operation. */
-const replayEntry = (entry: Lib.HistoryEntry, scope: Lib.Scope): Effect.Effect<void, unknown> => {
-  if (entry._tag === 'OnOp') {
-    return entry.targets.length > 0
-      ? skillsOn(entry.targets.join(','), { scope, strict: false })
-      : Effect.void
-  }
-  if (entry._tag === 'OffOp') {
-    return skillsOff(entry.targets.join(','), { scope, strict: false })
-  }
-  return Console.error(`  warn: redo replay for ${entry._tag} not yet implemented`)
-}
+/** Redo an OnOp by creating symlinks directly (no full skillsOn pipeline). */
+const redoOnOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OnOp' }, scope: Lib.Scope) =>
+  Effect.gen(function* () {
+    if (entry.targets.length === 0) return
+    const dir = Lib.outfitDir(scope)
+    yield* Lib.ensureOutfitDir(dir)
+
+    for (const target of entry.targets) {
+      const flatName = Lib.flattenName(Lib.colonToPath(target))
+      const relPath = Lib.colonToPath(target)
+      const linkPath = path.join(dir, flatName)
+
+      const already = yield* Effect.tryPromise(() => lstat(linkPath).then(() => true)).pipe(
+        Effect.catchAll(() => Effect.succeed(false)),
+      )
+      if (already) continue
+
+      // Only use the scope-appropriate library (no cross-scope fallthrough)
+      const libDir = Lib.scopeLibraryDir(scope)
+      const libPath = path.join(libDir, relPath)
+      const libExists = yield* Effect.tryPromise(() => lstat(libPath).then((s) => s.isDirectory())).pipe(
+        Effect.catchAll(() => Effect.succeed(false)),
+      )
+      if (libExists) {
+        yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(
+          Effect.catchAll(() => Effect.void),
+        )
+      }
+    }
+  })
+
+/** Redo an OffOp by removing symlinks directly (no full skillsOff pipeline). */
+const redoOffOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OffOp' }, scope: Lib.Scope) =>
+  Effect.gen(function* () {
+    const dir = Lib.outfitDir(scope)
+    if (entry.targets.length === 0) {
+      // Reset-all: remove all pluggable symlinks in this scope
+      const outfit = yield* Lib.listOutfit(scope)
+      for (const e of outfit) {
+        if (e.commitment === 'pluggable') {
+          yield* Effect.tryPromise(() => unlink(path.join(dir, e.name))).pipe(
+            Effect.catchAll(() => Effect.void),
+          )
+        }
+      }
+      return
+    }
+    for (const target of entry.targets) {
+      const flatName = Lib.flattenName(Lib.colonToPath(target))
+      const linkPath = path.join(dir, flatName)
+      yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
+    }
+  })
 
 /** Redo a composite MoveOp by replaying sub-actions in forward order. */
 const redoMoveOp = (entry: Lib.HistoryEntry & { readonly _tag: 'MoveOp' }) =>
@@ -84,17 +123,6 @@ const redoMoveOp = (entry: Lib.HistoryEntry & { readonly _tag: 'MoveOp' }) =>
     }
   })
 
-/** Resolve a scope key from a sub-action to the actual outfit directory. */
-const resolveOutfitDir = (scopeKey: string): string =>
-  scopeKey === 'user' || scopeKey === 'global'
-    ? Lib.outfitDir('user')
-    : scopeKey === 'project'
-      ? Lib.outfitDir('project')
-      : path.join(scopeKey, '.claude/skills')
-
-/** Resolve a scope key to a Lib.Scope for library search order. */
-const resolveLibScope = (scopeKey: string): Lib.Scope =>
-  scopeKey === 'user' || scopeKey === 'global' ? 'user' : 'project'
 
 /** Replay a single sub-action from a composite move. */
 const replaySubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> => {
@@ -116,29 +144,25 @@ const replaySubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> =>
       yield* Effect.tryPromise(() => cp(sub.sourcePath, sub.destPath, { recursive: true }))
     })
   }
-  // OnOp: create symlinks
+  // OnOp: create symlinks (scope-safe — only use matching library)
   if (sub._tag === 'OnOp') {
     return Effect.gen(function* () {
+      const scope = sub.scope === 'user' || sub.scope === 'global' ? 'user' : 'project'
+      const libDir = Lib.scopeLibraryDir(scope)
       for (const target of sub.targets) {
         const flatName = Lib.flattenName(Lib.colonToPath(target))
         const relPath = Lib.colonToPath(target)
-        const outfitDir = resolveOutfitDir(sub.scope)
+        const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
-        const libraryDirs = Lib.librarySearchOrder(resolveLibScope(sub.scope))
-        for (const libDir of libraryDirs) {
-          const libPath = path.join(libDir, relPath)
-          const exists = yield* Effect.tryPromise(async () => {
-            const { lstat } = await import('node:fs/promises')
-            const s = await lstat(libPath)
-            return s.isDirectory()
-          }).pipe(Effect.catchAll(() => Effect.succeed(false)))
-          if (exists) {
-            yield* Effect.tryPromise(() => mkdir(path.dirname(linkPath), { recursive: true }))
-            yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(
-              Effect.catchAll(() => Effect.void),
-            )
-            break
-          }
+        const libPath = path.join(libDir, relPath)
+        const exists = yield* Effect.tryPromise(() => lstat(libPath).then((s) => s.isDirectory())).pipe(
+          Effect.catchAll(() => Effect.succeed(false)),
+        )
+        if (exists) {
+          yield* Effect.tryPromise(() => mkdir(path.dirname(linkPath), { recursive: true }))
+          yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(
+            Effect.catchAll(() => Effect.void),
+          )
         }
       }
     })
@@ -148,7 +172,7 @@ const replaySubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> =>
     return Effect.gen(function* () {
       for (const target of sub.targets) {
         const flatName = Lib.flattenName(Lib.colonToPath(target))
-        const outfitDir = resolveOutfitDir(sub.scope)
+        const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
         yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
       }

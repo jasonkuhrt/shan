@@ -96,9 +96,10 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
         }
       }
 
-      // Record doctor history entry
+      // Record doctor history entry — reload state since fixes may have modified it
       if (fixedCount > 0) {
-        const history = Lib.getProjectHistory(state, 'project')
+        const freshState = yield* Lib.loadState()
+        const history = Lib.getProjectHistory(freshState, 'project')
         history.entries.push(
           Lib.DoctorOp({
             targets: fixDescriptions,
@@ -109,7 +110,7 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
         if (history.entries.length > config.skills.historyLimit) {
           history.entries.splice(0, history.entries.length - config.skills.historyLimit)
         }
-        const newState = Lib.setProjectHistory(state, 'project', history)
+        const newState = Lib.setProjectHistory(freshState, 'project', history)
         yield* Lib.saveState(newState)
       }
     } else {

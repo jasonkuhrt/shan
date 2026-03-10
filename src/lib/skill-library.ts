@@ -56,6 +56,40 @@ export const librarySearchOrder = (scope: Scope): string[] => {
   return [projectLibraryDir(), LIBRARY_DIR]
 }
 
+/**
+ * The single library directory for a scope. Unlike `librarySearchOrder`,
+ * this never falls through — use it in all write paths to prevent cross-scope mutations.
+ */
+export const scopeLibraryDir = (scope: Scope): string =>
+  scope === 'user' ? LIBRARY_DIR : projectLibraryDir()
+
+/**
+ * Rebuild `state.current` for a scope from the filesystem and return updated state.
+ * Use after any operation that mutates outfit symlinks without individually tracking adds/removes.
+ */
+export const syncCurrentInstalls = (state: ShanState, scope: Scope) =>
+  Effect.gen(function* () {
+    const installs = yield* bootstrapCurrent(scope)
+    return setCurrentInstalls(state, scope, installs)
+  })
+
+/**
+ * Resolve a history sub-action scope key to a Lib.Scope.
+ * History entries store scope as strings ('user', 'global', 'project', or absolute project paths).
+ */
+export const resolveHistoryScope = (scopeKey: string): Scope =>
+  scopeKey === 'user' || scopeKey === 'global' ? 'user' : 'project'
+
+/**
+ * Resolve a history sub-action scope key to its outfit directory path.
+ */
+export const resolveHistoryOutfitDir = (scopeKey: string): string =>
+  scopeKey === 'user' || scopeKey === 'global'
+    ? outfitDir('user')
+    : scopeKey === 'project'
+      ? outfitDir('project')
+      : path.join(scopeKey, '.claude/skills')
+
 // ── Enums ──────────────────────────────────────────────────────────
 
 export const Scope = Schema.Literal('user', 'project')
@@ -784,11 +818,15 @@ export const getNodeType = (libraryPath: string) =>
 /**
  * Resolve a target name (colon syntax) to its library path and node type.
  * Returns null if not found in library.
+ *
+ * @param strict - When true (default), only searches the scope-matched library.
+ *   When false, falls through to other scopes (read-only discovery only — never
+ *   use strict=false in write paths).
  */
-export const resolveTarget = (colonName: string, scope: Scope = 'project') =>
+export const resolveTarget = (colonName: string, scope: Scope = 'project', strict = true) =>
   Effect.gen(function* () {
     const relPath = colonToPath(colonName)
-    const dirs = librarySearchOrder(scope)
+    const dirs = strict ? [scopeLibraryDir(scope)] : librarySearchOrder(scope)
 
     for (const libDir of dirs) {
       const libraryPath = path.join(libDir, relPath)
@@ -1093,28 +1131,23 @@ export const restoreSnapshot = (
       }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
       if (!exists) {
-        // Reverse-resolve: symlink name → library path (check both libraries)
+        // Reverse-resolve: symlink name → library path (scope-safe — no cross-scope fallthrough)
         const libRelPath = unflattenName(name)
-        let restored = false
-        for (const libDir of librarySearchOrder(scope)) {
-          const libPath = path.join(libDir, libRelPath)
-          const libExists = yield* Effect.tryPromise(async () => {
-            const entryStat = await lstat(libPath)
-            return entryStat.isDirectory()
-          }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+        const libDir = scopeLibraryDir(scope)
+        const libPath = path.join(libDir, libRelPath)
+        const libExists = yield* Effect.tryPromise(async () => {
+          const entryStat = await lstat(libPath)
+          return entryStat.isDirectory()
+        }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
-          if (libExists) {
-            yield* Effect.tryPromise(() => symlink(libPath, entryPath)).pipe(
-              Effect.catchAll((err) =>
-                Console.error(`  warn: could not restore ${name}: ${String(err)}`),
-              ),
-            )
-            restored = true
-            break
-          }
-        }
-        if (!restored) {
-          yield* Console.error(`  warn: skipping ${name} — no longer in any library`)
+        if (libExists) {
+          yield* Effect.tryPromise(() => symlink(libPath, entryPath)).pipe(
+            Effect.catchAll((err) =>
+              Console.error(`  warn: could not restore ${name}: ${String(err)}`),
+            ),
+          )
+        } else {
+          yield* Console.error(`  warn: skipping ${name} — not found in ${scope} library`)
         }
       }
     }
@@ -1128,23 +1161,21 @@ export const restoreSnapshot = (
       }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
       if (!exists) {
-        // Re-generate the router (check both libraries)
-        for (const libDir of librarySearchOrder(scope)) {
-          const libPath = path.join(libDir, router)
-          const libExists = yield* Effect.tryPromise(async () => {
-            const entryStat = await lstat(libPath)
-            return entryStat.isDirectory()
-          }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+        // Re-generate the router (scope-safe — no cross-scope fallthrough)
+        const routerLibDir = scopeLibraryDir(scope)
+        const libPath = path.join(routerLibDir, router)
+        const libExists = yield* Effect.tryPromise(async () => {
+          const entryStat = await lstat(libPath)
+          return entryStat.isDirectory()
+        }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
-          if (libExists) {
-            const leaves = yield* resolveLeaves(router, libDir)
-            const routerContent = generateRouter(router, leaves)
-            yield* Effect.tryPromise(() => mkdir(routerPath, { recursive: true }))
-            yield* Effect.tryPromise(() =>
-              writeFile(path.join(routerPath, 'SKILL.md'), routerContent),
-            )
-            break
-          }
+        if (libExists) {
+          const leaves = yield* resolveLeaves(router, routerLibDir)
+          const routerContent = generateRouter(router, leaves)
+          yield* Effect.tryPromise(() => mkdir(routerPath, { recursive: true }))
+          yield* Effect.tryPromise(() =>
+            writeFile(path.join(routerPath, 'SKILL.md'), routerContent),
+          )
         }
       }
     }

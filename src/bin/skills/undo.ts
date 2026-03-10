@@ -7,7 +7,7 @@
 
 import { Console, Effect } from 'effect'
 import * as path from 'node:path'
-import { mkdir, rename, symlink, unlink } from 'node:fs/promises'
+import { lstat, mkdir, rename, symlink, unlink } from 'node:fs/promises'
 import * as Lib from '../../lib/skill-library.js'
 
 export const skillsUndo = (n: number, scope: Lib.Scope) =>
@@ -32,10 +32,13 @@ export const skillsUndo = (n: number, scope: Lib.Scope) =>
       yield* undoEntry(entry, scope)
     }
 
+    // Rebuild current installs from filesystem (undo mutates symlinks but not state.current)
+    let updatedState = yield* Lib.syncCurrentInstalls(state, scope)
+
     // Update undo pointer
     history.undoneCount += undoCount
-    const newState = Lib.setProjectHistory(state, scope, history)
-    yield* Lib.saveState(newState)
+    updatedState = Lib.setProjectHistory(updatedState, scope, history)
+    yield* Lib.saveState(updatedState)
 
     yield* Console.log(`Restored outfit to ${undoCount} operation${undoCount > 1 ? 's' : ''} ago.`)
   })
@@ -60,17 +63,6 @@ const undoMoveOp = (entry: Lib.HistoryEntry & { readonly _tag: 'MoveOp' }) =>
     }
   })
 
-/** Resolve a scope key from a sub-action to the actual outfit directory. */
-const resolveOutfitDir = (scopeKey: string): string =>
-  scopeKey === 'user' || scopeKey === 'global'
-    ? Lib.outfitDir('user')
-    : scopeKey === 'project'
-      ? Lib.outfitDir('project')
-      : path.join(scopeKey, '.claude/skills')
-
-/** Resolve a scope key to a Lib.Scope for library search order. */
-const resolveLibScope = (scopeKey: string): Lib.Scope =>
-  scopeKey === 'user' || scopeKey === 'global' ? 'user' : 'project'
 
 /** Reverse a single sub-action from a composite move. */
 const undoSubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> => {
@@ -89,7 +81,7 @@ const undoSubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> => {
   if (sub._tag === 'CopyToOutfitOp') {
     return Effect.gen(function* () {
       const { rm } = yield* Effect.tryPromise(() => import('node:fs/promises'))
-      yield* Effect.tryPromise(() => rm(sub.destPath, { recursive: true, force: true }))
+      yield* Effect.tryPromise(() => rm(sub.destPath, { recursive: true, force: true })) // rm not in static imports — dynamic ok
     })
   }
   // OnOp (install): reverse = remove the symlink
@@ -97,35 +89,32 @@ const undoSubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> => {
     return Effect.gen(function* () {
       for (const target of sub.targets) {
         const flatName = Lib.flattenName(Lib.colonToPath(target))
-        const outfitDir = resolveOutfitDir(sub.scope)
+        const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
         yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
       }
     })
   }
-  // OffOp (uninstall): reverse = recreate the symlink
+  // OffOp (uninstall): reverse = recreate the symlink (scope-safe)
   if (sub._tag === 'OffOp') {
     return Effect.gen(function* () {
+      const scope = Lib.resolveHistoryScope(sub.scope)
+      const libDir = Lib.scopeLibraryDir(scope)
       for (const target of sub.targets) {
         const flatName = Lib.flattenName(Lib.colonToPath(target))
         const relPath = Lib.colonToPath(target)
-        const outfitDir = resolveOutfitDir(sub.scope)
+        const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
-        const libraryDirs = Lib.librarySearchOrder(resolveLibScope(sub.scope))
-        for (const libDir of libraryDirs) {
-          const libPath = path.join(libDir, relPath)
-          const exists = yield* Effect.tryPromise(async () => {
-            const { lstat } = await import('node:fs/promises')
-            const s = await lstat(libPath)
-            return s.isDirectory()
-          }).pipe(Effect.catchAll(() => Effect.succeed(false)))
-          if (exists) {
-            yield* Effect.tryPromise(() => mkdir(path.dirname(linkPath), { recursive: true }))
-            yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(
-              Effect.catchAll(() => Effect.void),
-            )
-            break
-          }
+        const libPath = path.join(libDir, relPath)
+        const exists = yield* Effect.tryPromise(async () => {
+          const s = await lstat(libPath)
+          return s.isDirectory()
+        }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+        if (exists) {
+          yield* Effect.tryPromise(() => mkdir(path.dirname(linkPath), { recursive: true }))
+          yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(
+            Effect.catchAll(() => Effect.void),
+          )
         }
       }
     })

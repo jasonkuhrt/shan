@@ -39,7 +39,8 @@ export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
     }
 
     const targets = Lib.parseTargets(targetInput)
-    const searchScopes: Lib.Scope[] = ['project', 'user']
+    // Only search the requested scope's outfit — never cross scope boundaries.
+    const searchScopes: Lib.Scope[] = [options.scope]
 
     // ── Phase 1: Validate all targets (no side effects) ─────────────
 
@@ -47,7 +48,9 @@ export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
     const groupsToClean = new Set<string>()
 
     for (const target of targets) {
-      const resolved = yield* Lib.resolveTarget(target, options.scope)
+      // strict=false: off needs fallthrough to resolve group leaves for legacy cross-scope installs.
+      // The write is scoped by searchScopes=[options.scope], so fallthrough here is read-only.
+      const resolved = yield* Lib.resolveTarget(target, options.scope, false)
       if (!resolved) {
         batch.errors.push({ name: target, reason: 'not found in library' })
         continue
@@ -127,6 +130,14 @@ export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
       for (const groupName of groupsToClean) {
         yield* cleanupRouter(scopeDir, groupName, scope)
       }
+    }
+
+    // Clean up gitignore entries for removed project-scope skills
+    const projectGitignoreRemovals = batch.actions
+      .filter((a) => a.scope === 'project')
+      .map((a) => `.claude/skills/${a.flatName}`)
+    if (projectGitignoreRemovals.length > 0) {
+      yield* Lib.manageGitignoreRemove(process.cwd(), projectGitignoreRemovals)
     }
 
     // Update current state

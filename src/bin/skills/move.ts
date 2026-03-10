@@ -93,8 +93,12 @@ export const skillsMove = (
       allSubActions.push(...action.subActions)
     }
 
+    // Rebuild current installs for affected scopes after filesystem mutations.
+    let updatedState = yield* Lib.syncCurrentInstalls(state, 'user')
+    updatedState = yield* Lib.syncCurrentInstalls(updatedState, 'project')
+
     // Record composite history entry
-    const history = Lib.getProjectHistory(state, options.scope)
+    const history = Lib.getProjectHistory(updatedState, options.scope)
     if (history.undoneCount > 0) {
       history.entries.splice(history.entries.length - history.undoneCount)
       history.undoneCount = 0
@@ -112,8 +116,8 @@ export const skillsMove = (
     if (history.entries.length > config.skills.historyLimit) {
       history.entries.splice(0, history.entries.length - config.skills.historyLimit)
     }
-    const newState = Lib.setProjectHistory(state, options.scope, history)
-    yield* Lib.saveState(newState)
+    const finalState = Lib.setProjectHistory(updatedState, options.scope, history)
+    yield* Lib.saveState(finalState)
 
     // Report results
     yield* Lib.reportResults(Lib.batchToRows(batch, toRow))
@@ -357,8 +361,8 @@ const validateCommitmentUp = (
     const flatName = Lib.flattenName(Lib.colonToPath(target))
     const relPath = Lib.colonToPath(target)
 
-    // Find the skill in a library
-    const resolved = yield* Lib.resolveTarget(target, 'project')
+    // Find the skill in any library (commitment changes can cross scopes)
+    const resolved = yield* Lib.resolveTarget(target, 'project', false)
     if (!resolved) {
       // Check if it's already core
       const userOutfitPath = path.join(Lib.outfitDir('user'), flatName)
@@ -414,7 +418,7 @@ const validateCommitmentDown = (
 
     if (!userCore && !projectCore) {
       // Check if already pluggable
-      const resolved = yield* Lib.resolveTarget(target, 'project')
+      const resolved = yield* Lib.resolveTarget(target, 'project', false)
       if (resolved) return { _tag: 'skip' as const, reason: 'already pluggable' }
       return { _tag: 'error' as const, reason: 'not found' }
     }
