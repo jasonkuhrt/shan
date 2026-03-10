@@ -7,7 +7,7 @@
 
 import { Console, Effect } from 'effect'
 import * as path from 'node:path'
-import { lstat, mkdir, rename, symlink, unlink } from 'node:fs/promises'
+import { lstat, mkdir, rename, rm, symlink, unlink } from 'node:fs/promises'
 import * as Lib from '../../lib/skill-library.js'
 
 export const skillsUndo = (n: number, scope: Lib.Scope) =>
@@ -79,10 +79,7 @@ const undoSubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> => {
   }
   // CopyToOutfitOp: remove the copied outfit directory
   if (sub._tag === 'CopyToOutfitOp') {
-    return Effect.gen(function* () {
-      const { rm } = yield* Effect.tryPromise(() => import('node:fs/promises'))
-      yield* Effect.tryPromise(() => rm(sub.destPath, { recursive: true, force: true })) // rm not in static imports — dynamic ok
-    })
+    return Effect.tryPromise(() => rm(sub.destPath, { recursive: true, force: true }))
   }
   // OnOp (install): reverse = remove the symlink
   if (sub._tag === 'OnOp') {

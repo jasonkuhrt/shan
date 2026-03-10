@@ -26,7 +26,7 @@ interface ValidatedUninstall {
 
 export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
   Effect.gen(function* () {
-    const exists = yield* Lib.libraryExists()
+    const exists = yield* Lib.libraryExists(options.scope)
     if (!exists) {
       yield* Console.error('No skills library found.')
       return yield* Effect.fail(new Error('Library not found'))

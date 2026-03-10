@@ -765,10 +765,10 @@ export const estimateCharCost = (fm: SkillFrontmatter): number => {
 
 // ── Library operations ─────────────────────────────────────────────
 
-/** Check if the library directory exists. */
+/** Check if the library directory exists. When scope is given, only checks that scope's library. */
 export const libraryExists = (scope?: Scope) =>
   Effect.gen(function* () {
-    const dirs = scope ? librarySearchOrder(scope) : [LIBRARY_DIR, projectLibraryDir()]
+    const dirs = scope ? [scopeLibraryDir(scope)] : [LIBRARY_DIR, projectLibraryDir()]
     for (const dir of dirs) {
       const exists = yield* Effect.tryPromise(async () => {
         const dirStat = await stat(dir)
@@ -1132,21 +1132,28 @@ export const restoreSnapshot = (
 
       if (!exists) {
         // Reverse-resolve: symlink name → library path (scope-safe — no cross-scope fallthrough)
-        const libRelPath = unflattenName(name)
+        // Try literal name first (handles skills with underscores like "cc_test_ping"),
+        // then unflatten (handles nested skills like "ts_tooling" → "ts/tooling").
         const libDir = scopeLibraryDir(scope)
-        const libPath = path.join(libDir, libRelPath)
-        const libExists = yield* Effect.tryPromise(async () => {
-          const entryStat = await lstat(libPath)
-          return entryStat.isDirectory()
-        }).pipe(Effect.catchAll(() => Effect.succeed(false)))
-
-        if (libExists) {
-          yield* Effect.tryPromise(() => symlink(libPath, entryPath)).pipe(
-            Effect.catchAll((err) =>
-              Console.error(`  warn: could not restore ${name}: ${String(err)}`),
-            ),
-          )
-        } else {
+        const candidates = [name, unflattenName(name)]
+        let resolved = false
+        for (const candidate of candidates) {
+          const libPath = path.join(libDir, candidate)
+          const libExists = yield* Effect.tryPromise(async () => {
+            const entryStat = await lstat(libPath)
+            return entryStat.isDirectory()
+          }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+          if (libExists) {
+            yield* Effect.tryPromise(() => symlink(libPath, entryPath)).pipe(
+              Effect.catchAll((err) =>
+                Console.error(`  warn: could not restore ${name}: ${String(err)}`),
+              ),
+            )
+            resolved = true
+            break
+          }
+        }
+        if (!resolved) {
           yield* Console.error(`  warn: skipping ${name} — not found in ${scope} library`)
         }
       }
@@ -1339,7 +1346,7 @@ export const printTable = (rows: readonly (readonly string[])[]) =>
 
 /** Parse comma-separated targets, trimming whitespace. */
 export const parseTargets = (input: string): string[] =>
-  input
+  [...new Set(input
     .split(',')
     .map((t) => t.trim())
-    .filter(Boolean)
+    .filter(Boolean))]

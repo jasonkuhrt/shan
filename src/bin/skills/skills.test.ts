@@ -709,6 +709,113 @@ describe('CC integration', () => {
   )
 })
 
+// ── libraryExists scope guard ─────────────────────────────────────────
+
+describe('libraryExists scope guard', () => {
+  test('off at project scope fails when only user library exists', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('onlyuser')
+      await env.run(['skills', 'on', 'onlyuser', '--scope', 'user'])
+
+      // Remove the project library so only user library exists
+      await rm(env.projectLibrary, { recursive: true, force: true })
+
+      // off at project scope (default) should fail — no project library
+      const result = await env.run(['skills', 'off', 'onlyuser'])
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain('No skills library found')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('on at project scope fails when only user library exists', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('onlyuser2')
+
+      // Remove the project library
+      await rm(env.projectLibrary, { recursive: true, force: true })
+
+      const result = await env.run(['skills', 'on', 'onlyuser2'])
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain('No skills library found')
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+// ── duplicate target dedup ────────────────────────────────────────────
+
+describe('duplicate target handling', () => {
+  test('on with duplicate comma targets produces only one action', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('dupskill')
+      const result = await env.run(['skills', 'on', 'dupskill,dupskill', '--scope', 'user'])
+      expect(result.exitCode).toBe(0)
+
+      // Should only see one success row, not two
+      const successMatches = result.stdout.match(/✓/g) ?? []
+      expect(successMatches.length).toBe(1)
+
+      // And the symlink should exist
+      const link = await lstat(path.join(env.userOutfit, 'dupskill'))
+      expect(link.isSymbolicLink()).toBe(true)
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+// ── underscore name handling ──────────────────────────────────────────
+
+describe('underscore name handling', () => {
+  test('undo correctly restores a skill whose name contains underscores', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Skill named with underscores (not colon-separated nesting)
+      await env.addUserLibrarySkill('my_tool')
+      await env.run(['skills', 'on', 'my_tool', '--scope', 'user'])
+
+      // Verify it's on
+      const link = await lstat(path.join(env.userOutfit, 'my_tool'))
+      expect(link.isSymbolicLink()).toBe(true)
+
+      // off then undo should restore it
+      await env.run(['skills', 'off', 'my_tool', '--scope', 'user'])
+      const gone = await lstat(path.join(env.userOutfit, 'my_tool')).catch(() => null)
+      expect(gone).toBeNull()
+
+      await env.run(['skills', 'undo', '1', '--scope', 'user'])
+
+      // Should be back — undo must resolve "my_tool" to library/my_tool, not library/my/tool
+      const restored = await lstat(path.join(env.userOutfit, 'my_tool'))
+      expect(restored.isSymbolicLink()).toBe(true)
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('list shows correct name for underscore skills', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('my_tool')
+      await env.run(['skills', 'on', 'my_tool', '--scope', 'user'])
+
+      const result = await env.run(['skills', 'list'])
+      expect(result.exitCode).toBe(0)
+      // Should show "my_tool", not "my:tool"
+      expect(result.stdout).toContain('my_tool')
+      expect(result.stdout).not.toContain('my:tool')
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
 // ── state.current consistency ────────────────────────────────────────
 
 /** Read state.json from the test env's HOME. */

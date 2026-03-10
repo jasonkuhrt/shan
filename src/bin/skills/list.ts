@@ -58,7 +58,7 @@ export const skillsList = () =>
           const targetDir = entry.symlinkTarget ?? entry.dir
           const fm = yield* Lib.readFrontmatter(targetDir)
           const chars = fm && !fm.disableModelInvocation ? Lib.estimateCharCost(fm) : 0
-          const colonName = fm?.name ?? Lib.pathToColon(Lib.unflattenName(entry.name))
+          const colonName = fm?.name ?? entry.name
           items.push({ name: colonName, detail: chars > 0 ? String(chars) : '--' })
         }
         return items
