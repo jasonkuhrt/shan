@@ -186,6 +186,7 @@ const resetAll = (dir: string, scope: Lib.Scope) =>
     const outfit = yield* Lib.listOutfit(scope)
     let removed = 0
     let coreSkipped = 0
+    const removedNames: string[] = []
 
     for (const entry of outfit) {
       if (entry.commitment === 'pluggable') {
@@ -193,9 +194,16 @@ const resetAll = (dir: string, scope: Lib.Scope) =>
           Effect.catchAll(() => Effect.void),
         )
         removed++
+        removedNames.push(entry.name)
       } else {
         coreSkipped++
       }
+    }
+
+    // Clean up gitignore entries for project-scope removals
+    if (scope === 'project' && removedNames.length > 0) {
+      const gitignoreEntries = removedNames.map((n) => `.claude/skills/${n}`)
+      yield* Lib.manageGitignoreRemove(process.cwd(), gitignoreEntries)
     }
 
     // Cleanup all generated routers

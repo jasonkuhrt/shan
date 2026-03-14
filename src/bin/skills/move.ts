@@ -186,6 +186,17 @@ const validateScopeUp = (
     )
     if (userExists) return { _tag: 'skip' as const, reason: 'already at user scope' }
 
+    // Check user library collision
+    const userLibDir = Lib.LIBRARY_DIR
+    const userLibPath = path.join(userLibDir, relPath)
+    const userLibOccupied = yield* Effect.tryPromise(async () => {
+      const s = await lstat(userLibPath)
+      return s.isDirectory()
+    }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+    if (userLibOccupied) {
+      return { _tag: 'error' as const, reason: 'already exists in user library' }
+    }
+
     if (projectStat?.isDirectory() && !projectStat.isSymbolicLink()) {
       // Core skill — move directory
       return {
@@ -209,9 +220,6 @@ const validateScopeUp = (
 
     if (projectStat?.isSymbolicLink()) {
       // Pluggable, installed at project scope
-      const userLibDir = Lib.LIBRARY_DIR
-      const userLibPath = path.join(userLibDir, relPath)
-
       return {
         _tag: 'ok' as const,
         action: {
@@ -240,7 +248,6 @@ const validateScopeUp = (
 
     if (projLibExists) {
       // Pluggable, not installed — just move library dir
-      const userLibPath = path.join(Lib.LIBRARY_DIR, relPath)
       return {
         _tag: 'ok' as const,
         action: {
@@ -295,6 +302,17 @@ const validateScopeDown = (
     )
     if (projectExists) return { _tag: 'skip' as const, reason: 'already at project scope' }
 
+    // Check project library collision
+    const projLibDir = Lib.projectLibraryDir()
+    const projLibPath = path.join(projLibDir, relPath)
+    const projLibOccupied = yield* Effect.tryPromise(async () => {
+      const s = await lstat(projLibPath)
+      return s.isDirectory()
+    }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+    if (projLibOccupied) {
+      return { _tag: 'error' as const, reason: 'already exists in project library' }
+    }
+
     if (userStat?.isDirectory() && !userStat.isSymbolicLink()) {
       // Core skill — move directory
       return {
@@ -318,9 +336,6 @@ const validateScopeDown = (
 
     if (userStat?.isSymbolicLink() || userLibExists) {
       // Pluggable — move library dir, repoint installs
-      const projLibDir = Lib.projectLibraryDir()
-      const projLibPath = path.join(projLibDir, relPath)
-
       // Find all scopes where installed
       const state = yield* Lib.loadState()
       const affectedScopes = findAffectedScopes(state, flatName)
@@ -497,6 +512,9 @@ const executeScopeUpPluggableInstalled = (
     const libTarget = path.join(Lib.LIBRARY_DIR, relPath)
     yield* Lib.ensureOutfitDir(path.dirname(userOutfitPath))
     yield* Effect.tryPromise(() => symlink(libTarget, userOutfitPath))
+    // Clean up gitignore entry from old project-scope install
+    const flatName = Lib.flattenName(relPath)
+    yield* Lib.manageGitignoreRemove(process.cwd(), [`.claude/skills/${flatName}`])
   })
 
 const executeMoveLibraryDir = (src: string, dest: string) =>
@@ -536,6 +554,8 @@ const executeScopeDownPluggable = (
     // On at project scope
     yield* Lib.ensureOutfitDir(path.dirname(projectOutfitPath))
     yield* Effect.tryPromise(() => symlink(projLibPath, projectOutfitPath))
+    // Add gitignore entry for new project-scope skill
+    yield* Lib.manageGitignore(process.cwd(), [`.claude/skills/${flatName}`])
   })
 
 const executeCommitmentUp = (

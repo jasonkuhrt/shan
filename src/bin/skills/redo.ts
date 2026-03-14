@@ -36,8 +36,10 @@ export const skillsRedo = (n: number, scope: Lib.Scope) =>
       yield* redoEntry(entry, scope)
     }
 
-    // Rebuild current installs from filesystem after all mutations
-    let updatedState = yield* Lib.syncCurrentInstalls(state, scope)
+    // Rebuild current installs from filesystem after all mutations.
+    // MoveOp entries affect both scopes, so always sync both.
+    let updatedState = yield* Lib.syncCurrentInstalls(state, 'user')
+    updatedState = yield* Lib.syncCurrentInstalls(updatedState, 'project')
 
     // Update undo pointer
     history.undoneCount -= redoCount

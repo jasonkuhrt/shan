@@ -32,8 +32,10 @@ export const skillsUndo = (n: number, scope: Lib.Scope) =>
       yield* undoEntry(entry, scope)
     }
 
-    // Rebuild current installs from filesystem (undo mutates symlinks but not state.current)
-    let updatedState = yield* Lib.syncCurrentInstalls(state, scope)
+    // Rebuild current installs from filesystem (undo mutates symlinks but not state.current).
+    // MoveOp entries affect both scopes, so always sync both.
+    let updatedState = yield* Lib.syncCurrentInstalls(state, 'user')
+    updatedState = yield* Lib.syncCurrentInstalls(updatedState, 'project')
 
     // Update undo pointer
     history.undoneCount += undoCount

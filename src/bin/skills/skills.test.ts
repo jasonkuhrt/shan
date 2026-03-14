@@ -328,7 +328,7 @@ describe('off cross-scope guard', () => {
       expect(linkBefore.isSymbolicLink()).toBe(true)
 
       // Try to turn it off at project scope (the default)
-      const offResult = await env.run(['skills', 'off', 'gel'])
+      await env.run(['skills', 'off', 'gel'])
 
       // The user-scope symlink should still be intact
       const linkAfter = await lstat(path.join(env.userOutfit, 'gel'))
@@ -965,6 +965,164 @@ describe('state.current consistency', () => {
 
       // Redo should NOT add new history entries — it only moves the undo pointer
       expect(historyAfter).toBe(historyBefore)
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+// ── move scope: library collision ───────────────────────────────────
+
+describe('move scope library collision', () => {
+  test('move scope up should give a clear error when user library already has the skill', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Same skill name in both libraries
+      await env.addProjectLibrarySkill('collider')
+      await env.addUserLibrarySkill('collider')
+
+      const result = await env.run(['skills', 'move', 'scope', 'up', 'collider'])
+
+      // Should report a proper validation error, not a raw ENOTEMPTY crash
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stdout).toContain('already')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('move scope down should give a clear error when project library already has the skill', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('collider2')
+      await env.addProjectLibrarySkill('collider2')
+      await env.run(['skills', 'on', 'collider2', '--scope', 'user'])
+
+      const result = await env.run(['skills', 'move', 'scope', 'down', 'collider2'])
+
+      // Should report a proper validation error, not a raw ENOTEMPTY crash
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stdout).toContain('already')
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+// ── move scope: gitignore management ─────────────────────────────────
+
+/** Read .gitignore from the project dir, returns empty string if not found. */
+const readGitignore = (project: string) =>
+  readFile(path.join(project, '.gitignore'), 'utf-8').catch(() => '')
+
+describe('move scope gitignore', () => {
+  test('move scope down adds gitignore entry for new project-scope skill', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('gidown')
+      await env.run(['skills', 'on', 'gidown', '--scope', 'user'])
+
+      await env.run(['skills', 'move', 'scope', 'down', 'gidown'])
+
+      const gitignore = await readGitignore(env.project)
+      expect(gitignore).toContain('.claude/skills/gidown')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('move scope up removes gitignore entry for old project-scope skill', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addProjectLibrarySkill('giup')
+      await env.run(['skills', 'on', 'giup'])
+
+      // Verify gitignore entry was added by on
+      const before = await readGitignore(env.project)
+      expect(before).toContain('.claude/skills/giup')
+
+      await env.run(['skills', 'move', 'scope', 'up', 'giup'])
+
+      // After moving to user scope, the project gitignore entry should be removed
+      const after = await readGitignore(env.project)
+      expect(after).not.toContain('.claude/skills/giup')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('off reset-all cleans gitignore entries for project scope', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addProjectLibrarySkill('gireset1')
+      await env.addProjectLibrarySkill('gireset2')
+      await env.run(['skills', 'on', 'gireset1,gireset2'])
+
+      const before = await readGitignore(env.project)
+      expect(before).toContain('.claude/skills/gireset1')
+      expect(before).toContain('.claude/skills/gireset2')
+
+      // Reset all (no targets)
+      await env.run(['skills', 'off'])
+
+      const after = await readGitignore(env.project)
+      expect(after).not.toContain('.claude/skills/gireset1')
+      expect(after).not.toContain('.claude/skills/gireset2')
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+// ── undo/redo MoveOp: both scopes synced ─────────────────────────────
+
+describe('undo/redo MoveOp scope sync', () => {
+  test('undo of move scope down syncs both scopes in state.current', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('mvundo')
+      await env.run(['skills', 'on', 'mvundo', '--scope', 'user'])
+
+      // Move from user to project
+      await env.run(['skills', 'move', 'scope', 'down', 'mvundo'])
+
+      const afterMove = await readState(env.home)
+      expect(await getInstalls(afterMove, 'global')).not.toContain('mvundo')
+      expect(await getInstalls(afterMove, env.project)).toContain('mvundo')
+
+      // Undo the move
+      await env.run(['skills', 'undo', '1'])
+
+      const afterUndo = await readState(env.home)
+      // User scope should have mvundo back
+      expect(await getInstalls(afterUndo, 'global')).toContain('mvundo')
+      // Project scope should NOT have mvundo
+      expect(await getInstalls(afterUndo, env.project)).not.toContain('mvundo')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('redo of move scope down syncs both scopes in state.current', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('mvredo')
+      await env.run(['skills', 'on', 'mvredo', '--scope', 'user'])
+
+      await env.run(['skills', 'move', 'scope', 'down', 'mvredo'])
+      await env.run(['skills', 'undo', '1'])
+
+      // After undo: user has it, project doesn't
+      const afterUndo = await readState(env.home)
+      expect(await getInstalls(afterUndo, 'global')).toContain('mvredo')
+
+      // Redo the move
+      await env.run(['skills', 'redo', '1'])
+
+      const afterRedo = await readState(env.home)
+      // Project should have it, user should not
+      expect(await getInstalls(afterRedo, env.project)).toContain('mvredo')
+      expect(await getInstalls(afterRedo, 'global')).not.toContain('mvredo')
     } finally {
       await env.cleanup()
     }
