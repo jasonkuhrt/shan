@@ -1128,3 +1128,98 @@ describe('undo/redo MoveOp scope sync', () => {
     }
   })
 })
+
+// ── undo/redo gitignore lifecycle ────────────────────────────────────
+
+describe('undo/redo gitignore lifecycle', () => {
+  test('undo of on at project scope removes gitignore entry', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addProjectLibrarySkill('giundo')
+      await env.run(['skills', 'on', 'giundo'])
+
+      const before = await readGitignore(env.project)
+      expect(before).toContain('.claude/skills/giundo')
+
+      await env.run(['skills', 'undo', '1'])
+
+      const after = await readGitignore(env.project)
+      expect(after).not.toContain('.claude/skills/giundo')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('redo of on at project scope restores gitignore entry', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addProjectLibrarySkill('giredo')
+      await env.run(['skills', 'on', 'giredo'])
+      await env.run(['skills', 'undo', '1'])
+
+      // After undo, gitignore entry should be gone
+      const afterUndo = await readGitignore(env.project)
+      expect(afterUndo).not.toContain('.claude/skills/giredo')
+
+      await env.run(['skills', 'redo', '1'])
+
+      // After redo, gitignore entry should be back
+      const afterRedo = await readGitignore(env.project)
+      expect(afterRedo).toContain('.claude/skills/giredo')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('redo of off at project scope cleans gitignore entry', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addProjectLibrarySkill('giredoff')
+      await env.run(['skills', 'on', 'giredoff'])
+      await env.run(['skills', 'off', 'giredoff'])
+
+      // After off, gitignore entry should be gone
+      const afterOff = await readGitignore(env.project)
+      expect(afterOff).not.toContain('.claude/skills/giredoff')
+
+      // Undo the off → skill is back, gitignore should be back
+      await env.run(['skills', 'undo', '1'])
+      const afterUndoOff = await readGitignore(env.project)
+      expect(afterUndoOff).toContain('.claude/skills/giredoff')
+
+      // Redo the off → skill is gone, gitignore should be cleaned
+      await env.run(['skills', 'redo', '1'])
+      const afterRedoOff = await readGitignore(env.project)
+      expect(afterRedoOff).not.toContain('.claude/skills/giredoff')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('redo of reset-all at project scope cleans gitignore entries', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addProjectLibrarySkill('giresetredo1')
+      await env.addProjectLibrarySkill('giresetredo2')
+      await env.run(['skills', 'on', 'giresetredo1,giresetredo2'])
+
+      const before = await readGitignore(env.project)
+      expect(before).toContain('.claude/skills/giresetredo1')
+
+      await env.run(['skills', 'off'])
+      await env.run(['skills', 'undo', '1'])
+
+      // After undo of reset-all, skills and gitignore should be restored
+      const afterUndoReset = await readGitignore(env.project)
+      expect(afterUndoReset).toContain('.claude/skills/giresetredo1')
+
+      // Redo the reset-all
+      await env.run(['skills', 'redo', '1'])
+      const afterRedoReset = await readGitignore(env.project)
+      expect(afterRedoReset).not.toContain('.claude/skills/giresetredo1')
+      expect(afterRedoReset).not.toContain('.claude/skills/giresetredo2')
+    } finally {
+      await env.cleanup()
+    }
+  })
+})

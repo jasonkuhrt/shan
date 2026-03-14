@@ -11,7 +11,7 @@
 
 import { Console, Effect } from 'effect'
 import * as path from 'node:path'
-import { cp, lstat, mkdir, rename, symlink, unlink } from 'node:fs/promises'
+import { cp, lstat, mkdir, rename, rm, symlink, unlink } from 'node:fs/promises'
 import * as Lib from '../../lib/skill-library.js'
 
 export const skillsRedo = (n: number, scope: Lib.Scope) =>
@@ -70,6 +70,8 @@ const redoOnOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OnOp' }, scope: Li
     const dir = Lib.outfitDir(scope)
     yield* Lib.ensureOutfitDir(dir)
 
+    const gitignoreEntries: string[] = []
+
     for (const target of entry.targets) {
       const flatName = Lib.flattenName(Lib.colonToPath(target))
       const relPath = Lib.colonToPath(target)
@@ -90,7 +92,14 @@ const redoOnOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OnOp' }, scope: Li
         yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(
           Effect.catchAll(() => Effect.void),
         )
+        if (scope === 'project') {
+          gitignoreEntries.push(`.claude/skills/${flatName}`)
+        }
       }
+    }
+
+    if (gitignoreEntries.length > 0) {
+      yield* Lib.manageGitignore(process.cwd(), gitignoreEntries)
     }
   })
 
@@ -99,21 +108,44 @@ const redoOffOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OffOp' }, scope: 
   Effect.gen(function* () {
     const dir = Lib.outfitDir(scope)
     if (entry.targets.length === 0) {
-      // Reset-all: remove all pluggable symlinks in this scope
+      // Reset-all: remove all pluggable symlinks and generated routers in this scope
       const outfit = yield* Lib.listOutfit(scope)
+      const removedNames: string[] = []
       for (const e of outfit) {
         if (e.commitment === 'pluggable') {
           yield* Effect.tryPromise(() => unlink(path.join(dir, e.name))).pipe(
             Effect.catchAll(() => Effect.void),
           )
+          removedNames.push(e.name)
         }
+      }
+      // Clean up generated routers
+      const routers = yield* Lib.detectGeneratedRouters(scope)
+      for (const router of routers) {
+        yield* Effect.tryPromise(() => rm(path.join(dir, router), { recursive: true })).pipe(
+          Effect.catchAll(() => Effect.void),
+        )
+      }
+      // Clean up gitignore entries for project scope
+      if (scope === 'project' && removedNames.length > 0) {
+        yield* Lib.manageGitignoreRemove(
+          process.cwd(),
+          removedNames.map((n) => `.claude/skills/${n}`),
+        )
       }
       return
     }
+    const gitignoreRemovals: string[] = []
     for (const target of entry.targets) {
       const flatName = Lib.flattenName(Lib.colonToPath(target))
       const linkPath = path.join(dir, flatName)
       yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
+      if (scope === 'project') {
+        gitignoreRemovals.push(`.claude/skills/${flatName}`)
+      }
+    }
+    if (gitignoreRemovals.length > 0) {
+      yield* Lib.manageGitignoreRemove(process.cwd(), gitignoreRemovals)
     }
   })
 

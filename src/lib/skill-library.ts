@@ -1186,6 +1186,11 @@ export const restoreSnapshot = (
         }
       }
     }
+
+    // Sync gitignore for project scope: set entries to match restored snapshot
+    if (scope === 'project') {
+      yield* setGitignoreEntries(process.cwd(), snapshot.map((n) => `.claude/skills/${n}`))
+    }
   })
 
 // ── Auto-router generation ─────────────────────────────────────────
@@ -1298,6 +1303,39 @@ export const manageGitignoreRemove = (projectRoot: string, entriesToRemove: stri
       yield* Effect.tryPromise(() => writeFile(gitignorePath, newContent ? newContent + '\n' : ''))
     } else {
       const managedSection = `${GITIGNORE_START}\n${remaining.join('\n')}\n${GITIGNORE_END}`
+      const trimmedBefore = before.trimEnd()
+      const newContent = trimmedBefore
+        ? `${trimmedBefore}\n\n${managedSection}${after}`
+        : `${managedSection}${after}`
+      yield* Effect.tryPromise(() => writeFile(gitignorePath, newContent.trimEnd() + '\n'))
+    }
+  })
+
+/** Replace the shan-managed gitignore section with exactly the given entries. Empty array removes the section. */
+export const setGitignoreEntries = (projectRoot: string, entries: string[]) =>
+  Effect.gen(function* () {
+    const gitignorePath = path.join(projectRoot, '.gitignore')
+    const content = yield* Effect.tryPromise(() => readFile(gitignorePath, 'utf-8')).pipe(
+      Effect.catchAll(() => Effect.succeed('')),
+    )
+
+    const startIdx = content.indexOf(GITIGNORE_START)
+    const endIdx = content.indexOf(GITIGNORE_END)
+
+    let before = content
+    let after = ''
+    if (startIdx !== -1 && endIdx !== -1) {
+      before = content.slice(0, startIdx)
+      after = content.slice(endIdx + GITIGNORE_END.length)
+    }
+
+    if (entries.length === 0) {
+      // Remove the entire section
+      const newContent = (before.trimEnd() + after).trimEnd()
+      yield* Effect.tryPromise(() => writeFile(gitignorePath, newContent ? newContent + '\n' : ''))
+    } else {
+      const sorted = [...new Set(entries)].sort()
+      const managedSection = `${GITIGNORE_START}\n${sorted.join('\n')}\n${GITIGNORE_END}`
       const trimmedBefore = before.trimEnd()
       const newContent = trimmedBefore
         ? `${trimmedBefore}\n\n${managedSection}${after}`
