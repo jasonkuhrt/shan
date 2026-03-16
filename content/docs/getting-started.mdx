@@ -1,0 +1,88 @@
+---
+title: Getting Started
+description: Install shan and run your first commands.
+lucid_generated: true
+generated_at: "2026-03-16T00:00:00Z"
+source_files:
+  - README.md
+  - justfile
+  - package.json
+---
+
+## Prerequisites
+
+- [bun](https://bun.sh) (runtime and package manager)
+- [just](https://github.com/casey/just) (optional, for workflow commands)
+- An existing Claude Code installation (shan reads its artifacts)
+
+## Install from source
+
+```sh
+git clone git@github.com:jasonkuhrt/shan.git
+cd shan
+just install
+```
+
+This runs `bun install` to fetch dependencies.
+
+## Register globally
+
+To make `bun x @jasonkuhrt/shan` available from any directory:
+
+```sh
+just install-global
+```
+
+This runs `bun link`, which registers the package globally.
+
+## Install bundled skills
+
+Shan ships five Claude Code skills that let you invoke shan commands from inside a Claude Code session (e.g. `/shan transcript print`). Install them at user scope:
+
+```sh
+just install-skills-user
+```
+
+This copies skill definitions into `~/.claude/skills-library/` and creates outfit symlinks in `~/.claude/skills/`.
+
+## First use: dump a transcript
+
+Pick a recent Claude Code session and dump it as Markdown:
+
+```sh
+bun run shan -- transcript dump
+```
+
+Without a target argument, shan opens an interactive picker showing sessions for the current project. Select one. Shan writes a `.claude/transcripts/<session-id>.transcript.md` file with columnar headings you can navigate in your editor's outline view.
+
+## First use: list skills
+
+See which skills are active:
+
+```sh
+bun run shan -- skills list
+```
+
+The output shows core skills (always active), pluggable-on skills (symlinked from library), pluggable-off skills (available but not equipped), and the total character budget usage.
+
+## What just happened
+
+- `transcript dump` parsed the JSONL session file using Effect Schema, extracted entry types and summaries, and wrote formatted Markdown
+- `skills list` read `~/.claude/shan/state.json` and the outfit/library directories to compute the effective skill set
+- Both commands resolved file paths from Claude Code's standard locations (`~/.claude/projects/`, `~/.claude/skills/`)
+
+## Running from the repo
+
+If you skipped global registration, prefix commands with `bun run shan --`:
+
+```sh
+bun run shan -- transcript analyze dc8ffe42
+bun run shan -- skills on playwright,linear
+bun run shan -- task open
+```
+
+## Next steps
+
+- [CLI Reference](./reference/cli) — every command, flag, and argument
+- [Manage skill outfits](./guides/manage-skill-outfits) — toggle, move, and organize skills
+- [Inspect transcripts](./guides/inspect-transcripts) — dump, print, and analyze sessions

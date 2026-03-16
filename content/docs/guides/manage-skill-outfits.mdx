@@ -1,0 +1,109 @@
+---
+title: Manage skill outfits
+description: Toggle skills on and off, move between scopes, undo changes, and run health checks.
+lucid_generated: true
+generated_at: "2026-03-16T00:00:00Z"
+source_files:
+  - src/bin/shan.ts
+  - src/bin/skills/on.ts
+  - src/bin/skills/off.ts
+  - src/bin/skills/move.ts
+  - src/bin/skills/undo.ts
+  - src/bin/skills/redo.ts
+  - src/lib/skill-library.ts
+  - src/bundled-skills/skills/change/SKILL.md
+---
+
+## See what you have
+
+```sh
+shan skills list
+```
+
+The output groups skills by scope and status:
+
+- **Core (user)** / **Core (project)** — real directories shan does not manage
+- **Pluggable on (user)** / **Pluggable on (project)** — symlinks from outfit to library, with character cost
+- **Pluggable off** — in the library but not currently equipped
+- **Budget** — total approximate character cost of all model-visible skills against Claude Code's character budget
+
+## Turn skills on
+
+```sh
+shan skills on playwright
+shan skills on ts:tooling,linear,playwright
+shan skills on ts                              # whole group
+shan skills on --scope user gel                # user-level
+```
+
+Targets use colon-syntax. A group name (like `ts`) includes all descendant leaf skills. Comma-separated for batches.
+
+If a skill is already on, it's reported as a skip (not an error). Pass `--strict` to treat skips as errors.
+
+## Turn skills off
+
+```sh
+shan skills off playwright
+shan skills off ts                             # whole group
+shan skills off                                # reset: turn off ALL pluggable skills
+shan skills off --scope user                   # reset at user scope
+```
+
+No targets means reset — every pluggable skill in the scope gets turned off.
+
+## Move skills between scopes
+
+Move a skill from the project library to the user library (or vice versa):
+
+```sh
+shan skills move scope up playwright           # project → user
+shan skills move scope down ts:tooling         # user → project
+shan skills move scope down tips,linear        # batch move
+```
+
+`scope up` moves from project to user. `scope down` moves from user to project. The skill's library directory is relocated and the outfit symlink is updated atomically.
+
+## Move skills between commitments
+
+Convert a pluggable skill to core (or vice versa):
+
+```sh
+shan skills move commitment up playwright      # pluggable → core (copy to outfit)
+shan skills move commitment down playwright    # core → pluggable (move to library)
+```
+
+`commitment up` copies the library skill into the outfit as a real directory — shan stops managing it. `commitment down` moves a core directory into the library and creates a symlink.
+
+## Undo and redo
+
+Every mutation records a snapshot. Undo restores the outfit to the state before the operation:
+
+```sh
+shan skills undo                               # undo last operation
+shan skills undo 3                             # undo last 3 operations
+shan skills redo                               # redo last undone operation
+shan skills redo 2                             # redo last 2
+shan skills undo --scope user                  # undo at user scope
+```
+
+Composite operations (like a batch `move scope down tips,linear`) undo as a single unit — all sub-actions reverse together.
+
+## View history
+
+```sh
+shan skills history
+shan skills history --scope user
+```
+
+Shows the operation log: what changed, when, and the targets involved.
+
+## Run health checks
+
+```sh
+shan skills doctor                             # detect + auto-fix
+shan skills doctor --no-fix                    # report only
+```
+
+Doctor runs 13 diagnostic aspects: broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
+
+Default mode detects and fixes. Use `--no-fix` to see findings without changes.

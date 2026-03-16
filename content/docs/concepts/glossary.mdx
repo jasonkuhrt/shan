@@ -1,0 +1,32 @@
+---
+title: Glossary
+description: Definitions for outfit, library, core, pluggable, scope, commitment, and more.
+lucid_generated: true
+generated_at: "2026-03-16T00:00:00Z"
+source_files:
+  - src/lib/skill-library.ts
+  - src/bundled-skills/skills/change/SKILL.md
+  - docs/skills-move-design.md
+---
+
+**colon-syntax** — naming convention for hierarchical skills. `ts:tooling` means the `tooling` leaf inside the `ts` group. Targets use this form in all CLI commands.
+
+**commitment** — whether a skill is managed by shan. `pluggable` means shan controls it via symlinks. `core` means it's a real directory shan does not touch.
+
+**core** — a real directory in the outfit. Shan never modifies, moves, or deletes core skills. They are always active.
+
+**group** — a directory in the skill library that contains child skills. Targeting a group in a command includes all descendant leaf skills.
+
+**leaf** — a skill at the bottom of the hierarchy — a directory containing a `SKILL.md` file with no child skills.
+
+**library** — the directory storing all available pluggable skills. `~/.claude/skills-library/` at user scope, `.claude/skills-library/` at project scope.
+
+**outfit** — the set of active skills Claude Code loads on startup. `~/.claude/skills/` at user scope, `.claude/skills/` at project scope. Contains symlinks (pluggable) and real directories (core).
+
+**pluggable** — a skill managed by shan as a symlink from the outfit to the library. Can be toggled on (symlink exists) or off (symlink removed).
+
+**router** — a generated `SKILL.md` inside a group directory in the outfit. Routes Claude Code to the group's child skills.
+
+**scope** — `user` (global, `~/.claude/`) or `project` (repo-local, `.claude/`). Most commands default to project scope. Use `--scope user` or `--global` for user scope.
+
+**snapshot** — the recorded state of an outfit directory before a mutation. Shan stores snapshots in `state.json` so `undo` can restore the exact prior state.

@@ -1,0 +1,97 @@
+---
+title: Inspect transcripts
+description: Print, dump, and analyze Claude Code session transcripts.
+lucid_generated: true
+generated_at: "2026-03-16T00:00:00Z"
+source_files:
+  - src/bin/shan.ts
+  - src/bin/transcript/print.ts
+  - src/bin/transcript/dump.ts
+  - src/bin/transcript/analyze.ts
+  - src/lib/transcript-schema.ts
+  - src/lib/transcript-analyzer.ts
+  - docs/transcript-dump-spec.md
+  - docs/transcript-analyze-plan.md
+---
+
+Claude Code stores session transcripts as JSONL files in `~/.claude/projects/<encoded-path>/<uuid>.jsonl`. Shan gives you three ways to read them.
+
+## Print a readable conversation log
+
+```sh
+shan transcript print
+shan transcript print dc8ffe42
+```
+
+`print` renders the session as a conversation: user messages, Claude's prose, and tool calls summarized as one-liners. The output goes to `.claude/transcripts/<session-id>.print.md`.
+
+Add detail layers with `--show`:
+
+```sh
+shan transcript print --show results           # include tool results
+shan transcript print --show diffs              # include edit diffs
+shan transcript print --show thinking           # include Claude's thinking blocks
+shan transcript print --show trace              # include progress/system entries
+shan transcript print --show all                # everything
+shan transcript print --show diffs,results      # combine layers
+```
+
+Layers are additive — each one adds content without removing the base conversation.
+
+## Dump as navigable Markdown
+
+```sh
+shan transcript dump
+shan transcript dump dc8ffe42
+```
+
+`dump` transforms the raw JSONL into Markdown where every entry is an H1 heading with fixed-width columns:
+
+```markdown
+# `001` `01/25/2026 22:45` `file-history-snapshot` `snapshot______________________`
+# `002` `01/25/2026 22:45` `user_________________` `i noticed there is a dangerous`
+# `003` `01/25/2026 22:46` `assistant____________` `Bash ×2, Read_________________`
+```
+
+Columns are padded with underscores so they align in editor outline views (VS Code, Zed, etc.). The output goes to `.claude/transcripts/<session-id>.transcript.md`.
+
+### Raw copy
+
+```sh
+shan transcript dump --raw
+shan transcript dump --raw dc8ffe42
+```
+
+Copies the original JSONL without transformation. Useful for archiving or piping to other tools.
+
+## Analyze context consumption
+
+```sh
+shan transcript analyze
+shan transcript analyze dc8ffe42
+```
+
+`analyze` produces a terminal visualization with:
+
+1. **Elapsed time chart** — stacked area chart showing cumulative time since session start
+2. **Token chart** — stacked area chart showing cumulative token consumption
+3. **Dimension tracks** — one row per dimension (type, skill, tool, cache, model, files, trunc, error, alert, top) with Unicode symbols per entry
+4. **Top consumers** — the 9 assistant turns with the largest token deltas, showing tools used, active skill, model, and cache status
+5. **Summary** — entry count, cache hit rate, error/truncation counts
+
+Output goes to `.claude/transcripts/<session-id>.viz.txt`.
+
+The charts use `▁▂▃▄▅▆▇█` block characters for sub-row precision. Dimension tracks use distinct symbols per category (e.g. `◈` opus, `◇` sonnet, `●` cache hit, `○` miss).
+
+## Target resolution
+
+All transcript commands accept the same target syntax:
+
+| Form | Example | Resolves to |
+|------|---------|-------------|
+| Session ID | `dc8ffe42` | Prefix match against session UUIDs |
+| Full UUID | `9ba30f6f-...` | Exact match |
+| File path | `./file.jsonl` | Direct file |
+| _(omit)_ | | Interactive picker (TTY required) |
+
+The interactive picker shows sessions for the current project. Use `--all` to include sessions from all projects.

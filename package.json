@@ -62,6 +62,8 @@
     "check:exports": "bun run build && attw --pack . --profile esm-only",
     "check:ci": "actionlint",
     "shan": "bun src/bin/shan.ts",
+    "docs:dev": "next dev",
+    "docs:build": "next build",
     "pre-commit": "bun run check"
   },
   "dependencies": {
@@ -70,16 +72,28 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
+    "@tailwindcss/postcss": "^4.2.1",
     "@tsconfig/node24": "^24.0.4",
     "@tsconfig/strictest": "2.0.8",
     "@types/bun": "^1.3.10",
+    "@types/mdx": "^2.0.13",
     "@types/node": "25.3.5",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@typescript/native-preview": "7.0.0-dev.20260306.1",
     "dripip": "0.10.0",
+    "fumadocs-core": "^16.6.17",
+    "fumadocs-mdx": "^14.2.10",
+    "fumadocs-ui": "^16.6.17",
+    "next": "^16.1.6",
     "oxfmt": "^0.36.0",
     "oxlint": "^1.51.0",
     "oxlint-tsgolint": "^0.16.0",
+    "postcss": "^8.5.8",
     "publint": "^0.3.18",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwindcss": "^4.2.1",
     "typescript": "5.9.3"
   }
 }

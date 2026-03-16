@@ -1,0 +1,69 @@
+---
+title: Work with tasks
+description: Dump and open Claude Code task files from the terminal.
+lucid_generated: true
+generated_at: "2026-03-16T00:00:00Z"
+source_files:
+  - src/bin/shan.ts
+  - src/bin/task/dump.ts
+  - src/bin/task/open.ts
+  - src/lib/task-schema.ts
+  - src/lib/task-resolver.ts
+  - src/lib/task-picker.ts
+---
+
+Claude Code stores task lists as JSON files in `~/.claude/tasks/`. Shan copies them into your project or opens them in your editor — zero Claude Code context consumed.
+
+## Dump task files
+
+```sh
+shan task dump                                 # interactive picker
+shan task dump test-schema                     # named list
+shan task dump 21b0                            # UUID-prefixed session list
+```
+
+Copies the task JSON into `.claude/tasks/` in your project directory.
+
+### Dump a single task
+
+```sh
+shan task dump test-schema@3                   # task #3 in named list
+shan task dump "@Scaffold"                     # first task matching subject
+```
+
+### Dump as Markdown
+
+```sh
+shan task dump --md test-schema
+```
+
+Converts the task JSON to a readable Markdown format instead of copying raw JSON.
+
+### Include all projects
+
+By default, only task lists belonging to the current project are shown. Named lists are always included; UUID lists are included only if the UUID matches a session from the current project's session directory.
+
+```sh
+shan task dump --all                           # include all projects' task lists
+```
+
+## Open task files in your editor
+
+```sh
+shan task open                                 # interactive picker
+shan task open test-schema                     # open list directory
+shan task open test-schema@3                   # open single task file
+shan task open --all                           # include all projects' lists in picker
+```
+
+Opens in `$EDITOR` (defaults to Zed).
+
+## Target syntax
+
+| Form | Example | Resolves to |
+|------|---------|-------------|
+| Named list | `test-schema` | Exact match on list name |
+| UUID prefix | `21b0` | Prefix match against session UUIDs |
+| List + task | `test-schema@3` | Task #3 in named list |
+| Subject search | `@Scaffold` | First task with "Scaffold" in subject |
+| _(omit)_ | | Interactive picker (TTY required) |

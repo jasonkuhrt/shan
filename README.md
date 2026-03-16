@@ -2,15 +2,11 @@
 
 [![trunk](https://github.com/jasonkuhrt/shan/actions/workflows/trunk.yaml/badge.svg)](https://github.com/jasonkuhrt/shan/actions/workflows/trunk.yaml)
 
-Claude Code tooling CLI for three jobs:
+Dump Claude Code transcripts, open task files, and toggle skill outfits from the terminal.
 
-- transcript inspection and export
-- task list discovery and opening
-- skill library and outfit management
+Named after Claude Shannon.
 
-The repo is now the product. Dotfiles can shell out to a globally installed `shan`, but the source of truth lives here.
-
-## Clone Repo Workflow
+## Install
 
 ```sh
 git clone git@github.com:jasonkuhrt/shan.git
@@ -18,102 +14,105 @@ cd shan
 just install
 ```
 
-Optional global registration for `bun x @jasonkuhrt/shan`:
+Optional global registration (enables `bun x @jasonkuhrt/shan` from any directory):
 
 ```sh
 just install-global
-just install-skills-user
 ```
 
-If you do not want the global registration, run it from the repo:
-
-```sh
-bun run shan -- skills list
-```
-
-Install shan's bundled user-level skills into `~/.claude/skills-library` and equip them:
+Install shan's bundled Claude Code skills (enables `/shan` inside Claude Code sessions):
 
 ```sh
 just install-skills-user
 ```
 
-## What Shan Manages
+## Commands
 
-The CLI reads and writes a few stable locations:
-
-- `~/.claude/shan/config.json`
-- `~/.claude/shan/state.json`
-- `~/.claude/skills-library/`
-- `~/.claude/skills/`
-- `.claude/skills-library/`
-- `.claude/skills/`
-
-Transcript and task commands also read Claude Code session/task files from the current machine and project.
-
-## CLI
-
-```text
-shan transcript print [target]
-shan transcript dump [target]
-shan transcript dump --raw [target]
-shan transcript analyze [target]
-
-shan task dump [target]
-shan task dump --md [target]
-shan task open [target]
-
-shan skills
-shan skills on <targets>
-shan skills off [targets]
-shan skills move <axis> <direction> <targets>
-shan skills list
-shan skills history
-shan skills undo [N]
-shan skills redo [N]
-shan skills doctor [--no-fix]
-shan skills migrate [--execute]
-shan skills install-user
-```
-
-Common examples:
+### Transcripts
 
 ```sh
-shan transcript print
-shan transcript dump dc8ffe42
-shan task open
-shan skills on playwright,linear
-shan skills move scope up playwright
-shan skills doctor
+shan transcript print [target]                 # readable conversation log
+shan transcript print --show diffs,results     # with edit diffs and tool results
+shan transcript dump [target]                  # navigable Markdown with columnar headings
+shan transcript dump --raw [target]            # copy raw JSONL
+shan transcript analyze [target]               # terminal visualization of context consumption
 ```
+
+### Tasks
+
+```sh
+shan task dump [target]                        # copy task JSON into project
+shan task dump --md [target]                   # convert to Markdown
+shan task open [target]                        # open in $EDITOR
+```
+
+### Skills
+
+```sh
+shan skills                                    # show outfit (default: list)
+shan skills on playwright,linear               # turn on skills
+shan skills off ts                             # turn off a group
+shan skills off                                # reset: off all pluggable
+shan skills move scope up playwright           # project → user library
+shan skills move commitment down playwright    # core → pluggable
+shan skills history                            # operation log
+shan skills undo                               # undo last operation
+shan skills redo                               # redo last undone
+shan skills doctor                             # 13-aspect health checks + auto-fix
+shan skills install-user                       # install bundled shan skills
+```
+
+### Targeting
+
+Transcript targets: session ID prefix, full UUID, file path, or omit for interactive picker.
+
+Task targets: list name, UUID prefix, `list@N`, `@subject-search`, or omit for picker.
+
+Skill targets: comma-separated colon-syntax names (e.g. `ts:tooling,playwright`). Group names include all descendant leaves.
+
+## Key concepts
+
+**Outfit** — the set of active skills Claude Code sees (`~/.claude/skills/` or `.claude/skills/`). Contains symlinks (pluggable) and real directories (core).
+
+**Library** — all available pluggable skills (`~/.claude/skills-library/` or `.claude/skills-library/`). Toggling a skill on creates a symlink from outfit to library; off removes it.
+
+**Scope** — `user` (global, `~/.claude/`) or `project` (repo-local, `.claude/`). Default is project.
+
+**Commitment** — `core` (real directory, shan never touches) or `pluggable` (symlink managed by shan).
+
+Every mutation records a snapshot for `undo`/`redo`. `doctor` runs 13 diagnostic aspects with auto-fix.
+
+## Managed locations
+
+| Path | Purpose |
+|------|---------|
+| `~/.claude/shan/config.json` | Configuration |
+| `~/.claude/shan/state.json` | Current installs, operation history |
+| `~/.claude/skills-library/` | User skill library |
+| `~/.claude/skills/` | User outfit |
+| `.claude/skills-library/` | Project skill library |
+| `.claude/skills/` | Project outfit |
 
 ## Development
 
-Primary workflows go through the root `justfile`:
-
 ```sh
-just install
-just install-global
-just run skills list
-just test
-just check
+just install          # bun install
+just test             # bun test
+just check            # format + lint + types + test + coverage + package + exports + CI
+just run skills list  # run shan from repo
 ```
-
-Direct commands, if needed:
-
-```sh
-bun run shan -- transcript analyze
-bun run check
-```
-
-Quality gates:
-
-- `just pre-commit` runs format, lint, and type checks
-- `just pre-push` runs the full `bun run check` gate
 
 ## Docs
 
-Design notes that moved over with the extraction:
+Run the docs site locally with `bun run docs:dev`, then open `http://localhost:3000/docs`.
 
-- `docs/transcript-dump-spec.md`
-- `docs/transcript-analyze-plan.md`
-- `docs/skills-move-design.md`
+- [Getting started](content/docs/getting-started.mdx)
+- [Conceptual overview](content/docs/concepts/overview.mdx)
+- [CLI reference](content/docs/reference/cli.mdx)
+- [Manage skill outfits](content/docs/guides/manage-skill-outfits.mdx)
+- [Inspect transcripts](content/docs/guides/inspect-transcripts.mdx)
+- [Work with tasks](content/docs/guides/work-with-tasks.mdx)
+
+## License
+
+MIT

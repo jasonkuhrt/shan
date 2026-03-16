@@ -1,0 +1,82 @@
+---
+title: What is shan?
+description: Shan's three namespaces, skill management model, and transcript processing.
+lucid_generated: true
+generated_at: "2026-03-16T00:00:00Z"
+source_files:
+  - package.json
+  - README.md
+  - src/bin/shan.ts
+  - src/lib/skill-library.ts
+  - src/bundled-skills/skills/change/SKILL.md
+  - docs/skills-move-design.md
+  - docs/transcript-dump-spec.md
+  - docs/transcript-analyze-plan.md
+---
+
+Shan is a CLI for working with Claude Code artifacts from the terminal. It reads transcripts, task lists, and skill configurations that Claude Code writes to disk, and gives you commands to inspect, export, and manage them without opening Claude Code itself.
+
+Named after Claude Shannon.
+
+## The three problems
+
+Claude Code stores session transcripts as JSONL, task lists as JSON, and skill configurations as symlinked directory trees. These formats are machine-readable but not human-friendly. You can't skim a transcript in an editor, you can't quickly check which skills are active across scopes, and you can't open a task file without knowing where Claude Code put it.
+
+Shan solves each with a dedicated namespace:
+
+- **`transcript`** — converts JSONL sessions into readable Markdown and terminal visualizations
+- **`task`** — copies task files into your project and opens them in your editor
+- **`skills`** — manages which skills Claude Code sees, across user and project scopes
+
+## How shan thinks about skills
+
+Claude Code loads skills from two outfit directories: `~/.claude/skills/` (user scope) and `.claude/skills/` (project scope). Each skill is a directory containing a `SKILL.md` file with frontmatter (name, description, triggers) and a prompt body.
+
+Shan introduces a **library** layer behind each outfit. The library (`~/.claude/skills-library/` or `.claude/skills-library/`) stores all available skills. The outfit contains symlinks pointing into the library. Toggling a skill on creates the symlink; toggling it off removes it.
+
+This two-layer model creates a vocabulary:
+
+| Term | Meaning |
+|------|---------|
+| **outfit** | Active skills Claude Code sees — the symlinks in `skills/` |
+| **library** | All available skills — the real files in `skills-library/` |
+| **core** | A real directory in the outfit that shan never touches |
+| **pluggable** | A symlink managed by shan — can be toggled on and off |
+| **scope** | `user` (global) or `project` (repo-local) |
+| **commitment** | `core` (ejected, real files) or `pluggable` (symlinked from library) |
+
+Skills use colon-syntax for hierarchical names: `ts:tooling`, `flo:next`. Targeting a group name (like `ts`) includes all descendant leaves.
+
+Every mutation (on, off, move) is recorded in `state.json` with a snapshot, so `undo` and `redo` restore the outfit to an exact prior state.
+
+## How shan thinks about transcripts
+
+Claude Code writes session transcripts as JSONL files in `~/.claude/projects/<encoded-path>/<uuid>.jsonl`. Each line is a typed entry: `user`, `assistant`, `summary`, `system`, `progress`, `file-history-snapshot`, or `queue-operation`.
+
+Shan parses these entries using Effect Schema types (`TranscriptEntry`, `AssistantMessage`, `Usage`) and offers three views:
+
+- **print** renders a conversation log — user messages, Claude's prose, tool calls as one-liners — with optional detail layers (`--show results,diffs,thinking,trace`)
+- **dump** transforms JSONL into Markdown with columnar headings designed for editor outline navigation
+- **analyze** produces a terminal visualization: stacked area charts (elapsed time and token accumulation), dimension tracks (entry type, skill, tool, cache, model, files, truncation, errors, alerts), a top-consumers table, and a summary
+
+## What shan does not do
+
+- Shan does not start or manage Claude Code sessions. It reads artifacts after the fact.
+- Shan does not modify authored skill content. It moves, links, and unlinks skill directories. The one exception: when a group is activated, shan generates a router `SKILL.md` in the outfit that lists the group's children for Claude Code dispatch.
+- Shan does not replace Claude Code's built-in skill loading. It manages the filesystem layout that Claude Code reads.
+- Shan does not require a running Claude Code instance. It operates on files at rest.
+
+## Architecture
+
+Shan is a TypeScript CLI built on [Effect](https://effect.website) for type-safe schema parsing, effectful control flow, and structured errors. It runs via `bun` and builds with `tsgo` (native TypeScript compiler).
+
+The CLI entry point (`src/bin/shan.ts`) dispatches to namespace modules (`transcript/`, `task/`, `skills/`). Core logic lives in `src/lib/`:
+
+- `skill-library.ts` — outfit/library management, batch operations, history, doctor aspects
+- `transcript-schema.ts` — Effect Schema definitions for all transcript entry types
+- `transcript-analyzer.ts` — analysis computations (token accumulation, dimension extraction)
+- `session-resolver.ts` — session ID prefix matching and file resolution
+- `task-schema.ts` — Effect Schema for task entries
+- `viz/` — chart rendering, dimension tracks, legend formatting
+
+The package also exports `transcript-schema` and `task-schema` as a library for other tools to consume.
