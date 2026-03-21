@@ -27,6 +27,7 @@ import { skillsDoctor } from './skills/doctor.js'
 import { skillsMigrate } from './skills/migrate.js'
 import { skillsMove } from './skills/move.js'
 import { skillsInstallUser } from './skills/install-user.js'
+import { skillsCreate } from './skills/create.js'
 import type { MoveAxis, MoveDirection } from './skills/move.js'
 import type { Scope } from '../lib/skill-library.js'
 
@@ -60,6 +61,7 @@ Commands:
   shan skills undo [N]                  Undo last N operations (default: 1)
   shan skills redo [N]                  Redo last N undone operations (default: 1)
   shan skills doctor                    Run health checks
+  shan skills create <name>             Scaffold a new skill with SKILL.md template
   shan skills install-user              Install bundled shan skills at user scope
 
 Options:
@@ -91,6 +93,7 @@ Available commands:
   undo [N]                  Undo last N operations
   redo [N]                  Redo last N undone operations
   doctor [--no-fix]         Run health checks
+  create <name>             Scaffold a new skill with SKILL.md template
   migrate [--execute]       Migrate from flat inventory to hierarchical library
   install-user              Install bundled shan skills at user scope
 
@@ -223,6 +226,8 @@ const program = Effect.gen(function* () {
       yield* skillsDoctor({ noFix: flags.noFix })
     } else if (command === 'migrate') {
       yield* skillsMigrate({ execute: flags.execute })
+    } else if (command === 'create') {
+      yield* skillsCreate(positional[0] ?? '', { scope })
     } else if (command === 'install-user') {
       yield* skillsInstallUser()
     } else {
@@ -242,6 +247,7 @@ const QUIET_ERRORS = new Set([
   'Unknown namespace',
   'Missing targets',
   'Library not found',
+  'Skill already exists',
   'Some targets failed',
 ])
 
