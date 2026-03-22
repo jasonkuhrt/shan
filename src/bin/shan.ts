@@ -29,6 +29,8 @@ import { skillsMove } from './skills/move.js'
 import { skillsInstallUser } from './skills/install-user.js'
 import { skillsCreate } from './skills/create.js'
 import { lintHooks } from './lint/hooks.js'
+import { buildLintContext } from './lint/context.js'
+import { renderFinding, renderSummary } from './lint/finding.js'
 import type { MoveAxis, MoveDirection } from './skills/move.js'
 import type { Scope } from '../lib/skill-library.js'
 
@@ -240,12 +242,36 @@ const program = Effect.gen(function* () {
       return yield* Effect.fail(new Error('Unknown command'))
     }
   } else if (namespace === 'lint') {
-    if (command === 'hooks' || !command) {
-      yield* lintHooks()
-    } else {
+    const ctx = buildLintContext()
+    if (ctx.settingsFiles.length === 0) {
+      yield* Console.log('lint: no settings files found')
+      return
+    }
+    yield* Console.log(`lint: checking ${ctx.settingsFiles.length} settings file${ctx.settingsFiles.length > 1 ? 's' : ''}...`)
+    yield* Console.log('')
+
+    // Collect findings from requested (or all) rules
+    const findings =
+      command === 'hooks' || !command
+        ? lintHooks(ctx)
+        : (() => {
+            // Unknown subcommand — fall through to error
+            return null
+          })()
+
+    if (findings === null) {
       yield* Console.error(`Unknown lint command: ${command}`)
       yield* Console.log('\nAvailable commands:\n  hooks    Check hook/statusLine paths in settings')
       return yield* Effect.fail(new Error('Unknown command'))
+    }
+
+    for (const f of findings) {
+      yield* renderFinding(f)
+    }
+    yield* renderSummary(findings)
+
+    if (findings.some((f) => f.severity === 'error')) {
+      return yield* Effect.fail(new Error('Lint errors found'))
     }
   } else {
     yield* Console.error(`Unknown namespace: ${namespace}`)
