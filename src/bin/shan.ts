@@ -28,6 +28,7 @@ import { skillsMigrate } from './skills/migrate.js'
 import { skillsMove } from './skills/move.js'
 import { skillsInstallUser } from './skills/install-user.js'
 import { skillsCreate } from './skills/create.js'
+import { lintHooks } from './lint/hooks.js'
 import type { MoveAxis, MoveDirection } from './skills/move.js'
 import type { Scope } from '../lib/skill-library.js'
 
@@ -41,6 +42,7 @@ Namespaces:
   transcript    Transcript manipulation commands
   task          Task list inspection commands
   skills        Skill library and outfit management
+  lint          Static analysis for Claude Code configuration
 
 Commands:
   shan transcript print [target]        Print readable conversation log
@@ -63,6 +65,8 @@ Commands:
   shan skills doctor                    Run health checks
   shan skills create <name>             Scaffold a new skill with SKILL.md template
   shan skills install-user              Install bundled shan skills at user scope
+
+  shan lint hooks                       Check hook/statusLine paths in settings
 
 Options:
   --all                Show all sessions/task lists (default: current project only)
@@ -235,6 +239,14 @@ const program = Effect.gen(function* () {
       yield* Console.log('\n' + SKILLS_USAGE)
       return yield* Effect.fail(new Error('Unknown command'))
     }
+  } else if (namespace === 'lint') {
+    if (command === 'hooks' || !command) {
+      yield* lintHooks()
+    } else {
+      yield* Console.error(`Unknown lint command: ${command}`)
+      yield* Console.log('\nAvailable commands:\n  hooks    Check hook/statusLine paths in settings')
+      return yield* Effect.fail(new Error('Unknown command'))
+    }
   } else {
     yield* Console.error(`Unknown namespace: ${namespace}`)
     yield* Console.log(USAGE)
@@ -249,6 +261,7 @@ const QUIET_ERRORS = new Set([
   'Library not found',
   'Skill already exists',
   'Some targets failed',
+  'Lint errors found',
 ])
 
 const run = async () => {
