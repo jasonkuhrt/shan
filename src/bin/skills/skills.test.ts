@@ -587,25 +587,28 @@ describe('namespaced skills', () => {
 // ── CC integration: verify skills are visible to Claude Code ────────
 
 /**
- * Parse the init event from CC's JSON output to get the list of skills
- * CC sees. The init event is emitted before the model runs, and includes
- * a `skills` array with the names of all visible skills.
+ * Parse the init event from CC's stream-json output to get the list of
+ * skills CC sees. The init event is emitted before the model runs, and
+ * includes a `skills` array with the names of all visible skills.
+ *
+ * `--output-format stream-json --verbose` emits line-delimited JSON events.
+ * `--output-format json` only emits the final result — no init event.
  */
 const parseCCSkills = (jsonOutput: string): string[] => {
-  // CC --output-format json emits a JSON array of events
-  try {
-    const events: unknown = JSON.parse(jsonOutput)
-    if (!Array.isArray(events)) return []
-    for (const event of events as unknown[]) {
+  for (const line of jsonOutput.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      const event: unknown = JSON.parse(trimmed)
       if (typeof event === 'object' && event !== null && 'type' in event && 'skills' in event) {
         const rec = event as Record<string, unknown>
         if (rec['type'] === 'system' && Array.isArray(rec['skills'])) {
           return (rec['skills'] as unknown[]).filter((s): s is string => typeof s === 'string')
         }
       }
+    } catch {
+      continue
     }
-  } catch {
-    // JSON output may be line-delimited in some modes
   }
   return []
 }
@@ -678,18 +681,21 @@ describe('CC integration', () => {
       )
 
       try {
-        const proc = Bun.spawn(['claude', '-p', 'reply OK', '--output-format', 'json'], {
-          cwd: project,
-          env: {
-            ...process.env,
-            // Clear nested-session detection vars
-            CLAUDECODE: '',
-            CLAUDE_CODE_ENTRYPOINT: '',
+        const proc = Bun.spawn(
+          ['claude', '-p', 'reply OK', '--output-format', 'stream-json', '--verbose'],
+          {
+            cwd: project,
+            env: {
+              ...process.env,
+              // Clear nested-session detection vars
+              CLAUDECODE: '',
+              CLAUDE_CODE_ENTRYPOINT: '',
+            },
+            stdin: 'ignore',
+            stdout: 'pipe',
+            stderr: 'pipe',
           },
-          stdin: 'ignore',
-          stdout: 'pipe',
-          stderr: 'pipe',
-        })
+        )
 
         const [stdout, , exitCode] = await Promise.all([
           new Response(proc.stdout).text(),
