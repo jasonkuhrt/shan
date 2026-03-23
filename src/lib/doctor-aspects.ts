@@ -5,7 +5,17 @@
  */
 
 import { Effect } from 'effect'
-import { lstat, readFile, readlink, rm, symlink, unlink, mkdir, writeFile } from 'node:fs/promises'
+import {
+  lstat,
+  readFile,
+  readlink,
+  rename,
+  rm,
+  symlink,
+  unlink,
+  mkdir,
+  writeFile,
+} from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from './skill-library.js'
 
@@ -135,17 +145,16 @@ const tryGitRenameRepoint = (name: string, oldTarget: string, scope: Lib.Scope) 
     // Check committed renames
     const relOld = path.relative(repoRoot, oldTarget)
     const renameOutput = yield* Effect.try(() =>
-      execSync(
-        `git log -1 --diff-filter=R --find-renames --format="" --name-status -- "${relOld}/SKILL.md"`,
-        {
-          cwd: repoRoot,
-          encoding: 'utf-8',
-        },
-      ).trim(),
+      execSync('git log -1 --diff-filter=R -M --format="" --name-status', {
+        cwd: repoRoot,
+        encoding: 'utf-8',
+      }).trim(),
     ).pipe(Effect.catchAll(() => Effect.succeed('')))
-    if (renameOutput) {
+    // Find the line that renames the old path
+    const renameLine = renameOutput.split('\n').find((l) => l.includes(`${relOld}/SKILL.md`))
+    if (renameLine) {
       // Parse: R100\told/path\tnew/path
-      const parts = renameOutput.split('\t')
+      const parts = renameLine.split('\t')
       if (parts.length >= 3) {
         const newRelPath = (parts[2] ?? '').replace(/\/SKILL\.md$/, '')
         const newAbsPath = path.join(repoRoot, newRelPath)
@@ -193,8 +202,7 @@ const stateDrift: DoctorAspect = {
                     // Try to recreate from the scope-appropriate library only.
                     // Never fall through to another scope's library — that would
                     // create a cross-scope install.
-                    const libDir =
-                      Lib.scopeLibraryDir(resolvedScope)
+                    const libDir = Lib.scopeLibraryDir(resolvedScope)
                     const resolved = yield* findLibraryByFlatName(flatName, libDir)
                     if (resolved) {
                       yield* Effect.tryPromise(() =>
@@ -205,7 +213,11 @@ const stateDrift: DoctorAspect = {
                     }
                     // Can't recreate in same scope — actually remove from state
                     const currentState = yield* Lib.loadState()
-                    const updatedState = Lib.removeCurrentInstall(currentState, resolvedScope, flatName)
+                    const updatedState = Lib.removeCurrentInstall(
+                      currentState,
+                      resolvedScope,
+                      flatName,
+                    )
                     yield* Lib.saveState(updatedState)
                     return `removed from state: ${flatName} (${scopeKey})`
                   }),
@@ -307,6 +319,54 @@ const staleGitignore: DoctorAspect = {
     }),
 }
 
+// ── Mismatch classification helpers ──────────────────────────────
+
+const stripSeparators = (s: string): string => s.replaceAll(/[:_-]/g, '')
+
+export type MismatchClassification = 'separator_only' | 'namespace_relocation' | 'complete_rename'
+
+export const classifyMismatch = (
+  dirColonName: string,
+  fmName: string,
+  namespaceCensus: Map<string, number>,
+): MismatchClassification => {
+  // SEPARATOR_ONLY: same string after stripping all separators, AND both names
+  // already use colons (i.e. the author is just restructuring nesting within the
+  // same namespace, not introducing a new colon-delimited level from scratch).
+  if (
+    stripSeparators(dirColonName) === stripSeparators(fmName) &&
+    dirColonName.includes(':') &&
+    fmName.includes(':')
+  ) {
+    return 'separator_only'
+  }
+
+  // NAMESPACE_RELOCATION: FM name uses a colon-prefix with an established namespace
+  const fmColonIndex = fmName.indexOf(':')
+  if (fmColonIndex !== -1) {
+    const fmPrefix = fmName.slice(0, fmColonIndex)
+    const count = namespaceCensus.get(fmPrefix) ?? 0
+    if (count >= 2) {
+      return 'namespace_relocation'
+    }
+  }
+
+  return 'complete_rename'
+}
+
+export const buildNamespaceCensus = (library: Lib.SkillInfo[]): Map<string, number> => {
+  const census = new Map<string, number>()
+  for (const skill of library) {
+    const parts = skill.colonName.split(':')
+    // Generate every colon-prefix (e.g. a:b:c contributes to "a" and "a:b")
+    for (let depth = 1; depth < parts.length; depth++) {
+      const prefix = parts.slice(0, depth).join(':')
+      census.set(prefix, (census.get(prefix) ?? 0) + 1)
+    }
+  }
+  return census
+}
+
 const frontmatterMismatch: DoctorAspect = {
   name: 'frontmatter-mismatch',
   description: "Skill frontmatter name doesn't match directory",
@@ -314,6 +374,8 @@ const frontmatterMismatch: DoctorAspect = {
   detect: (ctx) =>
     Effect.sync(() => {
       const findings: DoctorFinding[] = []
+      const census = buildNamespaceCensus(ctx.library)
+
       for (const skill of ctx.library) {
         if (!skill.frontmatter) {
           findings.push(
@@ -326,20 +388,116 @@ const frontmatterMismatch: DoctorAspect = {
           )
           continue
         }
-        if (skill.frontmatter.name !== skill.colonName) {
+        const fmName = skill.frontmatter.name
+        if (fmName === skill.colonName) continue
+
+        const classification = classifyMismatch(skill.colonName, fmName, census)
+
+        if (classification === 'separator_only') {
           findings.push(
             finding(
               'frontmatter-mismatch',
               'error',
-              `${skill.colonName} — name="${skill.frontmatter.name}" (expected "${skill.colonName}")`,
-              false,
+              `${skill.colonName} — name="${fmName}" (separator-only mismatch, will rename dir)`,
+              true,
+              () => fixMismatch(skill, fmName, ctx),
             ),
           )
+        } else if (classification === 'namespace_relocation') {
+          const fmPrefix = fmName.slice(0, fmName.indexOf(':'))
+          const peerCount = census.get(fmPrefix) ?? 0
+          findings.push(
+            finding(
+              'frontmatter-mismatch',
+              'error',
+              `${skill.colonName} — name="${fmName}" (${fmPrefix}: namespace has ${peerCount} peers, will rename dir)`,
+              true,
+              () => fixMismatch(skill, fmName, ctx),
+            ),
+          )
+        } else {
+          // COMPLETE_RENAME or NAMESPACE_RELOCATION with insufficient peers
+          const fmColonIndex = fmName.indexOf(':')
+          if (fmColonIndex !== -1) {
+            const fmPrefix = fmName.slice(0, fmColonIndex)
+            const peerCount = census.get(fmPrefix) ?? 0
+            findings.push(
+              finding(
+                'frontmatter-mismatch',
+                'error',
+                `${skill.colonName} — name="${fmName}" (${fmPrefix}: namespace has ${peerCount} peers, needs >=2)`,
+                false,
+              ),
+            )
+          } else {
+            findings.push(
+              finding(
+                'frontmatter-mismatch',
+                'error',
+                `${skill.colonName} — name="${fmName}" (complete rename, manual review needed)`,
+                false,
+              ),
+            )
+          }
         }
       }
       return findings
     }),
 }
+
+const fixMismatch = (
+  skill: Lib.SkillInfo,
+  fmName: string,
+  ctx: DoctorContext,
+): Effect.Effect<string, unknown> =>
+  Effect.gen(function* () {
+    const newRelPath = Lib.colonToPath(fmName)
+    const newDir = path.join(skill.libraryDir, newRelPath)
+    const oldDir = path.join(skill.libraryDir, skill.libraryRelPath)
+
+    // Fail if target already exists
+    const targetExists = yield* Effect.tryPromise(async () => {
+      const stat = await lstat(newDir)
+      return stat.isDirectory()
+    }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+    if (targetExists) {
+      return yield* Effect.fail(new Error(`target directory already exists: ${newDir}`))
+    }
+
+    // Create parent directories if needed
+    yield* Effect.tryPromise(() => mkdir(path.dirname(newDir), { recursive: true }))
+
+    // Atomic rename
+    yield* Effect.tryPromise(() => rename(oldDir, newDir))
+
+    // Repoint outfit symlinks that target the old dir
+    const allOutfitEntries = [
+      ...ctx.userOutfit.map((e) => ({ entry: e })),
+      ...ctx.projectOutfit.map((e) => ({ entry: e })),
+    ]
+    for (const { entry } of allOutfitEntries) {
+      if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
+      if (entry.symlinkTarget === oldDir || entry.symlinkTarget.startsWith(oldDir + '/')) {
+        const newTarget = newDir + entry.symlinkTarget.slice(oldDir.length)
+        // entry.dir is the full path to the symlink itself
+        const linkPath = entry.dir
+        yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
+        yield* Effect.tryPromise(() => symlink(newTarget, linkPath))
+      }
+    }
+
+    // Update state if the flattened name changed
+    const oldFlat = Lib.flattenName(skill.libraryRelPath)
+    const newFlat = Lib.flattenName(newRelPath)
+    if (oldFlat !== newFlat) {
+      const currentState = yield* Lib.loadState()
+      let updated = Lib.removeCurrentInstall(currentState, skill.libraryScope, oldFlat)
+      updated = Lib.addCurrentInstall(updated, skill.libraryScope, newFlat)
+      yield* Lib.saveState(updated)
+    }
+
+    return `renamed ${skill.colonName} → ${fmName} (dir: ${skill.libraryRelPath} → ${newRelPath})`
+  })
 
 const nameConflict: DoctorAspect = {
   name: 'name-conflict',
