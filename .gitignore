@@ -19,5 +19,5 @@ coverage
 .next/
 
 # shan-managed (do not edit)
-.claude/skills/__restore_symlink_err__
+.codex/skills
 # end shan-managed
