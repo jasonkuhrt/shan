@@ -17,3 +17,7 @@ coverage
 # Fumadocs
 .source/
 .next/
+
+# shan-managed (do not edit)
+.claude/skills/__restore_symlink_err__
+# end shan-managed

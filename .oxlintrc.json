@@ -59,7 +59,14 @@
     {
       "files": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/**/*.test.tsx", "src/**/*.spec.tsx"],
       "rules": {
-        "eslint/no-restricted-imports": "off"
+        "eslint/no-restricted-imports": "off",
+        "eslint/no-await-in-loop": "off",
+        "eslint-plugin-promise/prefer-await-to-then": "off",
+        "typescript/await-thenable": "off",
+        "typescript/no-confusing-void-expression": "off",
+        "typescript/no-non-null-assertion": "off",
+        "typescript/no-unsafe-type-assertion": "off",
+        "typescript/unbound-method": "off"
       }
     }
   ],

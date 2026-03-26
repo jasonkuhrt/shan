@@ -6,7 +6,8 @@
  *   .claude/skills-library/      Project library: pluggable skills committed to a repo
  *   ~/.claude/skills/            User outfit: core (real dirs) + pluggable (symlinks → library)
  *   .claude/skills/              Project outfit: same structure, scoped to project
- *   ~/.claude/shan/config.json   Settings (lazy-created)
+ *   ~/.config/shan/config.json   Settings (lazy-read)
+ *   ~/.local/shan/cache.json     Cached agent auto-detection
  *   ~/.claude/shan/state.json    Undo/redo history + current install index (lazy-created)
  *
  * Terminology:
@@ -40,8 +41,24 @@ import * as path from 'node:path'
 export const LIBRARY_DIR = path.join(homedir(), '.claude/skills-library')
 export const USER_OUTFIT_DIR = path.join(homedir(), '.claude/skills')
 export const SHAN_DIR = path.join(homedir(), '.claude/shan')
+export const CONFIG_DIR = path.join(homedir(), '.config/shan')
+export const CACHE_DIR = path.join(homedir(), '.local/shan')
 export const STATE_FILE = path.join(SHAN_DIR, 'state.json')
-export const CONFIG_FILE = path.join(SHAN_DIR, 'config.json')
+export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
+export const CACHE_FILE = path.join(CACHE_DIR, 'cache.json')
+const USER_HOME = homedir()
+const LEGACY_CONFIG_FILE = path.join(SHAN_DIR, 'config.json')
+export const CANONICAL_AGENT = 'claude' as const
+const AGENT_ORDER = [CANONICAL_AGENT, 'codex'] as const
+const AGENT_PROBE_COMMANDS = {
+  claude: 'claude',
+  codex: 'codex',
+} as const
+const AGENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const AGENT_ROOT_DIRS = {
+  claude: '.claude',
+  codex: '.codex',
+} as const
 
 /** Project-level library. Evaluated lazily (depends on cwd). */
 export const projectLibraryDir = () => path.join(process.cwd(), '.claude/skills-library')
@@ -94,6 +111,9 @@ export const resolveHistoryOutfitDir = (scopeKey: string): string =>
 
 export const Scope = Schema.Literal('user', 'project')
 export type Scope = typeof Scope.Type
+
+export const Agent = Schema.Literal('claude', 'codex')
+export type Agent = typeof Agent.Type
 
 export const Commitment = Schema.Literal('core', 'pluggable')
 export type Commitment = typeof Commitment.Type
@@ -338,9 +358,18 @@ export interface ShanConfig {
   skills: {
     historyLimit: number
     defaultScope: Scope
+    agents: 'auto' | Agent[]
     doctor?: {
       disabled?: string[]
     }
+  }
+}
+
+export interface ShanCache {
+  version: 1
+  agents: {
+    checkedAt: string
+    installed: Agent[]
   }
 }
 
@@ -442,22 +471,151 @@ const DEFAULT_CONFIG: ShanConfig = {
   skills: {
     historyLimit: 50,
     defaultScope: 'project',
+    agents: 'auto',
   },
 }
 
-export const loadConfig = () =>
+const DEFAULT_CACHE: ShanCache = {
+  version: 1,
+  agents: {
+    checkedAt: '',
+    installed: [],
+  },
+}
+
+const isScope = (value: string): value is Scope => value === 'user' || value === 'project'
+
+const isAgent = (value: string): value is Agent => value === 'claude' || value === 'codex'
+
+export const normalizeAgents = (agents: readonly string[]): Agent[] => {
+  const unique = new Set(agents.filter(isAgent))
+  return AGENT_ORDER.filter((agent) => unique.has(agent))
+}
+
+export const agentRootDir = (scope: Scope, agent: Agent): string =>
+  scope === 'user'
+    ? path.join(USER_HOME, AGENT_ROOT_DIRS[agent])
+    : path.join(process.cwd(), AGENT_ROOT_DIRS[agent])
+
+export const agentOutfitDir = (scope: Scope, agent: Agent): string =>
+  path.join(agentRootDir(scope, agent), 'skills')
+
+export const getMirrorAgents = (agents: readonly Agent[]): Agent[] =>
+  agents.filter((agent) => agent !== CANONICAL_AGENT)
+
+const readOptionalFile = (file: string) =>
+  Effect.tryPromise(() => readFile(file, 'utf-8')).pipe(Effect.catchAll(() => Effect.succeed(null)))
+
+const parseConfiguredAgents = (skills: Record<string, unknown> | undefined): 'auto' | Agent[] => {
+  if (!skills) return DEFAULT_CONFIG.skills.agents
+
+  const rawAgents = skills['agents']
+  if (rawAgents === 'auto') return 'auto'
+  if (Array.isArray(rawAgents)) {
+    return normalizeAgents(rawAgents.filter((value): value is string => typeof value === 'string'))
+  }
+
+  // Legacy config support: mirrorAgents implied the canonical Claude outfit plus mirrors.
+  const legacyMirrorAgents = getStringArray(skills, 'mirrorAgents')
+  if (legacyMirrorAgents.length > 0) {
+    return normalizeAgents([CANONICAL_AGENT, ...legacyMirrorAgents])
+  }
+
+  return DEFAULT_CONFIG.skills.agents
+}
+
+export const loadConfig = (): Effect.Effect<ShanConfig> =>
   Effect.gen(function* () {
-    const content = yield* Effect.tryPromise(() => readFile(CONFIG_FILE, 'utf-8')).pipe(
-      Effect.catchAll(() => Effect.succeed(null)),
-    )
+    const content =
+      (yield* readOptionalFile(CONFIG_FILE)) ?? (yield* readOptionalFile(LEGACY_CONFIG_FILE))
     if (!content) return DEFAULT_CONFIG
     try {
       const parsed: unknown = JSON.parse(content)
       if (!isRecord(parsed)) return DEFAULT_CONFIG
-      return { ...DEFAULT_CONFIG, ...parsed } as ShanConfig
+
+      const skills = getObject(parsed, 'skills')
+      const doctor = skills ? getObject(skills, 'doctor') : undefined
+      const defaultScope = skills ? getString(skills, 'defaultScope') : undefined
+
+      return {
+        version: 1 as const,
+        skills: {
+          historyLimit: skills
+            ? (getNumber(skills, 'historyLimit') ?? DEFAULT_CONFIG.skills.historyLimit)
+            : DEFAULT_CONFIG.skills.historyLimit,
+          defaultScope:
+            defaultScope && isScope(defaultScope)
+              ? defaultScope
+              : DEFAULT_CONFIG.skills.defaultScope,
+          agents: parseConfiguredAgents(skills),
+          ...(doctor ? { doctor: { disabled: getStringArray(doctor, 'disabled') } } : {}),
+        },
+      } satisfies ShanConfig
     } catch {
       return DEFAULT_CONFIG
     }
+  })
+
+const isFreshTimestamp = (value: string): boolean => {
+  const checkedAt = Date.parse(value)
+  return Number.isFinite(checkedAt) && Date.now() - checkedAt <= AGENT_CACHE_TTL_MS
+}
+
+export const loadCache = (): Effect.Effect<ShanCache> =>
+  Effect.gen(function* () {
+    const content = yield* readOptionalFile(CACHE_FILE)
+    if (!content) return DEFAULT_CACHE
+    try {
+      const parsed: unknown = JSON.parse(content)
+      if (!isRecord(parsed)) return DEFAULT_CACHE
+      const agents = getObject(parsed, 'agents')
+      return {
+        version: 1 as const,
+        agents: {
+          checkedAt: agents ? (getString(agents, 'checkedAt') ?? '') : '',
+          installed: agents ? normalizeAgents(getStringArray(agents, 'installed')) : [],
+        },
+      } satisfies ShanCache
+    } catch {
+      return DEFAULT_CACHE
+    }
+  })
+
+export const saveCache = (cache: ShanCache) =>
+  Effect.gen(function* () {
+    yield* Effect.tryPromise(() => mkdir(CACHE_DIR, { recursive: true }))
+    yield* Effect.tryPromise(() => writeFile(CACHE_FILE, JSON.stringify(cache, null, 2) + '\n'))
+  })
+
+export const detectInstalledAgents = (): Effect.Effect<Agent[]> =>
+  Effect.try(() =>
+    AGENT_ORDER.filter((agent) => {
+      const command = AGENT_PROBE_COMMANDS[agent]
+      return typeof Bun !== 'undefined' && Bun.which(command) !== null
+    }),
+  ).pipe(Effect.catchAll(() => Effect.succeed([])))
+
+export const resolveConfiguredAgents = (config: ShanConfig): Effect.Effect<Agent[]> =>
+  Effect.gen(function* () {
+    if (config.skills.agents !== 'auto') {
+      return normalizeAgents(config.skills.agents)
+    }
+
+    const cache = yield* loadCache()
+    if (isFreshTimestamp(cache.agents.checkedAt)) {
+      return cache.agents.installed
+    }
+
+    const detectedAgents = yield* detectInstalledAgents()
+    const installed = normalizeAgents(detectedAgents)
+    yield* saveCache({
+      version: 1,
+      agents: {
+        checkedAt: new Date().toISOString(),
+        installed,
+      },
+    }).pipe(Effect.catchAll(() => Effect.void))
+    return installed
   })
 
 // ── State ──────────────────────────────────────────────────────────
@@ -658,8 +816,7 @@ export const bootstrapCurrent = (scope: Scope) =>
 
 // ── Outfit path resolution ─────────────────────────────────────────
 
-export const outfitDir = (scope: Scope): string =>
-  scope === 'user' ? USER_OUTFIT_DIR : path.join(process.cwd(), '.claude/skills')
+export const outfitDir = (scope: Scope): string => agentOutfitDir(scope, CANONICAL_AGENT)
 
 /**
  * Ensure an outfit directory exists and is writable.
@@ -695,6 +852,80 @@ export const ensureOutfitDir = (dir: string) =>
 
     // Doesn't exist at all — create it
     yield* Effect.tryPromise(() => mkdir(dir, { recursive: true }))
+  })
+
+const mirrorGitignoreEntry = (agent: Agent): string => path.join(AGENT_ROOT_DIRS[agent], 'skills')
+
+const syncMirrorOutfit = (
+  scope: Scope,
+  mirrorAgent: Agent,
+  sourceEntries: readonly OutfitEntry[],
+) =>
+  Effect.gen(function* () {
+    const sourceDir = outfitDir(scope)
+    const mirrorDir = agentOutfitDir(scope, mirrorAgent)
+
+    yield* ensureOutfitDir(mirrorDir)
+
+    const desiredNames = new Set(sourceEntries.map((entry) => entry.name))
+    const existingNames = yield* Effect.tryPromise(() => readdir(mirrorDir)).pipe(
+      Effect.catchAll(() => Effect.succeed([] as string[])),
+    )
+
+    for (const name of existingNames) {
+      if (desiredNames.has(name)) continue
+      yield* Effect.tryPromise(() =>
+        rm(path.join(mirrorDir, name), { recursive: true, force: true }),
+      )
+    }
+
+    for (const entry of sourceEntries) {
+      const desiredTarget = path.join(sourceDir, entry.name)
+      const mirrorPath = path.join(mirrorDir, entry.name)
+      const existingStat = yield* Effect.tryPromise(() => lstat(mirrorPath)).pipe(
+        Effect.catchAll(() => Effect.succeed(null)),
+      )
+
+      if (existingStat?.isSymbolicLink()) {
+        const existingTarget = yield* Effect.tryPromise(() => readlink(mirrorPath)).pipe(
+          Effect.catchAll(() => Effect.succeed('')),
+        )
+        if (existingTarget === desiredTarget) {
+          continue
+        }
+      }
+
+      if (existingStat) {
+        yield* Effect.tryPromise(() => rm(mirrorPath, { recursive: true, force: true }))
+      }
+
+      yield* Effect.tryPromise(() => symlink(desiredTarget, mirrorPath))
+    }
+  })
+
+export const syncAgentMirrors = (scope: Scope, config?: ShanConfig) =>
+  Effect.gen(function* () {
+    const resolvedConfig = config ?? (yield* loadConfig())
+    const configuredAgents = yield* resolveConfiguredAgents(resolvedConfig)
+    const mirrorAgents = getMirrorAgents(configuredAgents)
+    const sourceEntries = yield* listOutfit(scope)
+
+    for (const mirrorAgent of mirrorAgents) {
+      yield* syncMirrorOutfit(scope, mirrorAgent, sourceEntries)
+    }
+
+    if (scope === 'project') {
+      const pluggableEntries = yield* snapshotOutfit(scope)
+      const generatedRouters = yield* detectGeneratedRouters(scope)
+      const canonicalEntries = [...new Set([...pluggableEntries, ...generatedRouters])].map(
+        (name) => path.join('.claude', 'skills', name),
+      )
+      const gitignoreEntries = [
+        ...canonicalEntries,
+        ...mirrorAgents.map((agent) => mirrorGitignoreEntry(agent)),
+      ].sort()
+      yield* setGitignoreEntries(process.cwd(), gitignoreEntries)
+    }
   })
 
 export class BrokenOutfitDirError extends Data.TaggedError('BrokenOutfitDirError')<{
@@ -1189,7 +1420,10 @@ export const restoreSnapshot = (
 
     // Sync gitignore for project scope: set entries to match restored snapshot
     if (scope === 'project') {
-      yield* setGitignoreEntries(process.cwd(), snapshot.map((n) => `.claude/skills/${n}`))
+      yield* setGitignoreEntries(
+        process.cwd(),
+        snapshot.map((n) => `.claude/skills/${n}`),
+      )
     }
   })
 
@@ -1261,7 +1495,14 @@ export const manageGitignore = (projectRoot: string, newEntries: string[]) =>
     // Merge and sort
     const allEntries = [...new Set([...existingEntries, ...newEntries])].sort()
 
-    if (allEntries.length === 0) return
+    if (allEntries.length === 0) {
+      if (startIdx === -1 || endIdx === -1) return
+      const trimmedBefore = before.trimEnd()
+      const trimmedAfter = after.trimStart()
+      const newContent = [trimmedBefore, trimmedAfter].filter(Boolean).join('\n\n')
+      yield* Effect.tryPromise(() => writeFile(gitignorePath, newContent.trimEnd() + '\n'))
+      return
+    }
 
     // Rebuild content
     const managedSection = `${GITIGNORE_START}\n${allEntries.join('\n')}\n${GITIGNORE_END}`
@@ -1383,8 +1624,11 @@ export const printTable = (rows: readonly (readonly string[])[]) =>
 // ── Parse batch targets ────────────────────────────────────────────
 
 /** Parse comma-separated targets, trimming whitespace. */
-export const parseTargets = (input: string): string[] =>
-  [...new Set(input
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean))]
+export const parseTargets = (input: string): string[] => [
+  ...new Set(
+    input
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean),
+  ),
+]

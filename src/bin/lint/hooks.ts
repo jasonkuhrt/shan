@@ -21,7 +21,7 @@ const REFERENCES: Reference[] = [
     url: 'https://github.com/anthropics/claude-code/issues/3583',
   },
   {
-    label: '#4198 — how to specify relative hook paths (answer: don\'t)',
+    label: "#4198 — how to specify relative hook paths (answer: don't)",
     url: 'https://github.com/anthropics/claude-code/issues/4198',
   },
   {
@@ -78,7 +78,14 @@ const findRelativePathToken = (command: string): string | null => {
   const tokens = command.split(/\s+/)
   for (const token of tokens) {
     if (!token) continue
-    if (token.startsWith('/') || token.startsWith('~') || token.startsWith('$') || token.startsWith('"$') || token.startsWith("'$")) continue
+    if (
+      token.startsWith('/') ||
+      token.startsWith('~') ||
+      token.startsWith('$') ||
+      token.startsWith('"$') ||
+      token.startsWith("'$")
+    )
+      continue
     if (token.startsWith('-')) continue
     if (!token.includes('/')) continue
     return token
@@ -93,19 +100,38 @@ interface HookCommand {
   location: string
 }
 
+interface HookMatcher {
+  hooks?: unknown[]
+}
+
+interface CommandEntry {
+  type?: string
+  command?: string
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+const isHookMatcher = (value: unknown): value is HookMatcher => isRecord(value)
+
+const isCommandEntry = (value: unknown): value is CommandEntry => isRecord(value)
+
 const extractHookCommands = (data: Record<string, unknown>): HookCommand[] => {
   const commands: HookCommand[] = []
 
-  const hooks = data['hooks'] as Record<string, unknown[]> | undefined
-  if (hooks && typeof hooks === 'object') {
-    for (const [event, matchers] of Object.entries(hooks)) {
-      if (!Array.isArray(matchers)) continue
+  const hooks = data['hooks']
+  if (isRecord(hooks)) {
+    for (const [event, value] of Object.entries(hooks)) {
+      if (!Array.isArray(value)) continue
+      const matchers: unknown[] = value
       for (let mi = 0; mi < matchers.length; mi++) {
-        const matcher = matchers[mi] as { hooks?: unknown[] } | undefined
-        if (!matcher?.hooks || !Array.isArray(matcher.hooks)) continue
+        const matcher = matchers[mi]
+        if (!isHookMatcher(matcher)) continue
+        if (!matcher.hooks || !Array.isArray(matcher.hooks)) continue
         for (let hi = 0; hi < matcher.hooks.length; hi++) {
-          const hook = matcher.hooks[hi] as { type?: string; command?: string } | undefined
-          if (hook?.type === 'command' && typeof hook.command === 'string') {
+          const hook = matcher.hooks[hi]
+          if (!isCommandEntry(hook)) continue
+          if (hook.type === 'command' && typeof hook.command === 'string') {
             commands.push({
               command: hook.command,
               location: `hooks.${event}[${mi}].hooks[${hi}]`,
@@ -116,8 +142,9 @@ const extractHookCommands = (data: Record<string, unknown>): HookCommand[] => {
     }
   }
 
-  const statusLine = data['statusLine'] as { type?: string; command?: string } | undefined
-  if (statusLine?.type === 'command' && typeof statusLine.command === 'string') {
+  const statusLine = data['statusLine']
+  if (!isCommandEntry(statusLine)) return commands
+  if (statusLine.type === 'command' && typeof statusLine.command === 'string') {
     commands.push({ command: statusLine.command, location: 'statusLine' })
   }
 
@@ -141,8 +168,8 @@ const checkFile = (settingsFile: SettingsFile): Finding[] => {
         rule: 'no-relative-hook-path',
         message: 'Relative path breaks when Claude changes directory',
         detail: [
-          'Hook commands execute in the shell\'s cwd at invocation time.',
-          'When Claude\'s Bash tool runs in another directory, the cwd shifts',
+          "Hook commands execute in the shell's cwd at invocation time.",
+          "When Claude's Bash tool runs in another directory, the cwd shifts",
           'and relative paths stop resolving. The official docs say "use absolute',
           'paths" and $CLAUDE_PROJECT_DIR was introduced specifically for this.',
         ].join(' '),

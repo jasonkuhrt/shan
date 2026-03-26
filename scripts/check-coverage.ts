@@ -1,65 +1,76 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env bun
 
-const [lcovPath, minLinesInput = '85', minFunctionsInput = '55'] = process.argv.slice(2)
+import {
+  formatCoveragePercent,
+  getCoverageHotspots,
+  parseCoverageReport,
+} from '../src/lib/coverage-report.js'
 
-if (!lcovPath) {
-  console.error('Usage: tsx scripts/check-coverage.ts <lcov-path> [min-lines] [min-functions]')
+const DEFAULT_COVERAGE_TARGET = 95
+const rawTarget =
+  process.argv[2] ?? process.env['SHAN_COVERAGE_TARGET'] ?? String(DEFAULT_COVERAGE_TARGET)
+const target = Number(rawTarget)
+
+if (!Number.isFinite(target) || target < 0 || target > 100) {
+  console.error(`Coverage target must be a number between 0 and 100. Received: ${rawTarget}`)
   process.exit(1)
 }
 
-const minLines = Number(minLinesInput)
-const minFunctions = Number(minFunctionsInput)
+const proc = Bun.spawn([process.execPath, 'test', '--coverage', 'src'], {
+  cwd: process.cwd(),
+  env: process.env,
+  stdin: 'inherit',
+  stdout: 'pipe',
+  stderr: 'pipe',
+})
 
-if (!Number.isFinite(minLines) || !Number.isFinite(minFunctions)) {
-  console.error('Coverage thresholds must be numeric.')
+const [stdout, stderr, exitCode] = await Promise.all([
+  new Response(proc.stdout).text(),
+  new Response(proc.stderr).text(),
+  proc.exited,
+])
+
+if (stdout) process.stdout.write(stdout)
+if (stderr) process.stderr.write(stderr)
+
+const output = [stdout, stderr].filter(Boolean).join('\n')
+const report = parseCoverageReport(output)
+
+if (exitCode !== 0) {
+  if (!report) {
+    process.exit(exitCode)
+  }
+
+  console.error('\nCoverage run failed before the overall gate could be evaluated.')
+  process.exit(exitCode)
+}
+
+if (!report) {
+  console.error('Could not parse Bun coverage output.')
   process.exit(1)
 }
 
-type CoverageRecord = {
-  linesFound: number
-  linesHit: number
-  functionsFound: number
-  functionsHit: number
-}
+console.log(
+  `\nCoverage gate: overall lines and functions must each be at least ${formatCoveragePercent(target)}.`,
+)
+console.log(
+  `Current overall: ${formatCoveragePercent(report.summary.lines)} lines, ${formatCoveragePercent(report.summary.functions)} functions.`,
+)
 
-import { readFileSync } from 'node:fs'
-
-const text = readFileSync(lcovPath, 'utf-8')
-const records: CoverageRecord[] = []
-let current: CoverageRecord = { linesFound: 0, linesHit: 0, functionsFound: 0, functionsHit: 0 }
-
-for (const line of text.split('\n')) {
-  if (line.startsWith('LF:')) current.linesFound = Number(line.slice(3))
-  else if (line.startsWith('LH:')) current.linesHit = Number(line.slice(3))
-  else if (line.startsWith('FNF:')) current.functionsFound = Number(line.slice(4))
-  else if (line.startsWith('FNH:')) current.functionsHit = Number(line.slice(4))
-  else if (line === 'end_of_record') {
-    records.push(current)
-    current = { linesFound: 0, linesHit: 0, functionsFound: 0, functionsHit: 0 }
+const hotspots = getCoverageHotspots(report, target)
+if (hotspots.length > 0) {
+  console.log('\nFiles below target:')
+  for (const hotspot of hotspots) {
+    const uncovered = hotspot.uncovered ? ` · uncovered ${hotspot.uncovered}` : ''
+    console.log(
+      `  ${hotspot.file} · ${formatCoveragePercent(hotspot.lines)} lines · ${formatCoveragePercent(hotspot.functions)} functions${uncovered}`,
+    )
   }
 }
 
-if (records.length === 0) {
-  console.error(`No coverage records found in ${lcovPath}.`)
+if (report.summary.lines < target || report.summary.functions < target) {
+  console.error('\nCoverage target not met.')
   process.exit(1)
 }
 
-const percent = (hit: number, found: number): number => (found === 0 ? 100 : (hit / found) * 100)
-const average = (values: number[]): number =>
-  values.reduce((sum, value) => sum + value, 0) / values.length
-
-const linesPct = average(records.map((record) => percent(record.linesHit, record.linesFound)))
-const functionsPct = average(
-  records.map((record) => percent(record.functionsHit, record.functionsFound)),
-)
-
-console.log(
-  `Coverage summary: ${linesPct.toFixed(2)}% lines, ${functionsPct.toFixed(2)}% functions across ${records.length} files`,
-)
-
-if (linesPct < minLines || functionsPct < minFunctions) {
-  console.error(
-    `Coverage threshold failed. Required >= ${minLines}% lines and >= ${minFunctions}% functions.`,
-  )
-  process.exit(1)
-}
+console.log('\nCoverage target met.')

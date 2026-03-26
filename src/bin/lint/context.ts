@@ -21,12 +21,16 @@ export interface LintContext {
   settingsFiles: SettingsFile[]
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
 // ── Discovery ────────────────────────────────────────────
 
 const tryParseJson = (filePath: string): Record<string, unknown> | null => {
   try {
     const raw = fs.readFileSync(filePath, 'utf-8')
-    return JSON.parse(raw) as Record<string, unknown>
+    const parsed: unknown = JSON.parse(raw)
+    return isRecord(parsed) ? parsed : null
   } catch {
     return null
   }

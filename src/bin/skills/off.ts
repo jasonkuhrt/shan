@@ -170,6 +170,7 @@ export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
       updatedState = Lib.setProjectHistory(updatedState, scope, history)
     }
     yield* Lib.saveState(updatedState)
+    yield* Lib.syncAgentMirrors(options.scope, config)
 
     // Report results
     yield* Lib.reportResults(Lib.batchToRows(batch, toRow))
@@ -237,6 +238,7 @@ const resetAll = (dir: string, scope: Lib.Scope) =>
     }
     const newState = Lib.setProjectHistory(updatedStateAfterClear, scope, history)
     yield* Lib.saveState(newState)
+    yield* Lib.syncAgentMirrors(scope, config)
 
     yield* Console.log(
       `Reset: ${removed} pluggable skills turned off (${coreSkipped} core skills untouched)`,

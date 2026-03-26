@@ -1,5 +1,15 @@
 import { describe, expect, test } from 'bun:test'
-import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 
@@ -268,7 +278,9 @@ describe('cross-scope guard', () => {
       // Verify no symlinks were created in the project outfit
       const alignExists = await lstat(path.join(env.projectOutfit, 'align')).catch(() => null)
       const alignGoExists = await lstat(path.join(env.projectOutfit, 'align_go')).catch(() => null)
-      const alignOnceExists = await lstat(path.join(env.projectOutfit, 'align_once')).catch(() => null)
+      const alignOnceExists = await lstat(path.join(env.projectOutfit, 'align_once')).catch(
+        () => null,
+      )
       expect(alignExists).toBeNull()
       expect(alignGoExists).toBeNull()
       expect(alignOnceExists).toBeNull()
@@ -832,7 +844,10 @@ const readState = async (home: string) => {
 }
 
 /** Get current installs for a scope key from state. Resolves realpath for project keys (macOS /var → /private/var). */
-const getInstalls = async (state: Awaited<ReturnType<typeof readState>>, scopeKey: string): Promise<string[]> => {
+const getInstalls = async (
+  state: Awaited<ReturnType<typeof readState>>,
+  scopeKey: string,
+): Promise<string[]> => {
   // Try exact key first
   if (state.current?.[scopeKey]?.installs) return state.current[scopeKey].installs
   // Try realpath (macOS /var/folders → /private/var/folders)
@@ -959,15 +974,17 @@ describe('state.current consistency', () => {
       await env.run(['skills', 'on', 'redhist', '--scope', 'user'])
       await env.run(['skills', 'undo', '1', '--scope', 'user'])
 
-      const state = await readState(env.home) as Record<string, unknown>
-      const historyBefore = (state as { history?: Record<string, { entries: unknown[] }> })
-        .history?.['global']?.entries.length ?? 0
+      const state = (await readState(env.home)) as Record<string, unknown>
+      const historyBefore =
+        (state as { history?: Record<string, { entries: unknown[] }> }).history?.['global']?.entries
+          .length ?? 0
 
       await env.run(['skills', 'redo', '1', '--scope', 'user'])
 
-      const stateAfter = await readState(env.home) as Record<string, unknown>
-      const historyAfter = (stateAfter as { history?: Record<string, { entries: unknown[] }> })
-        .history?.['global']?.entries.length ?? 0
+      const stateAfter = (await readState(env.home)) as Record<string, unknown>
+      const historyAfter =
+        (stateAfter as { history?: Record<string, { entries: unknown[] }> }).history?.['global']
+          ?.entries.length ?? 0
 
       // Redo should NOT add new history entries — it only moves the undo pointer
       expect(historyAfter).toBe(historyBefore)

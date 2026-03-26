@@ -2,7 +2,7 @@
 title: Getting Started
 description: Install shan and run your first commands.
 lucid_generated: true
-generated_at: "2026-03-16T00:00:00Z"
+generated_at: '2026-03-16T00:00:00Z'
 source_files:
   - README.md
   - justfile
@@ -14,6 +14,7 @@ source_files:
 - [bun](https://bun.sh) (runtime and package manager)
 - [just](https://github.com/casey/just) (optional, for workflow commands)
 - An existing Claude Code installation (shan reads its artifacts)
+- Optional: Codex if you want a mirrored skill view at `~/.codex/skills/` and `.codex/skills/`
 
 ## Install from source
 
@@ -43,7 +44,55 @@ Shan ships five Claude Code skills that let you invoke shan commands from inside
 just install-skills-user
 ```
 
-This copies skill definitions into `~/.claude/skills-library/` and creates outfit symlinks in `~/.claude/skills/`.
+This copies skill definitions into `~/.claude/skills-library/` and creates outfit symlinks in `~/.claude/skills/`. If `skills.agents` resolves to include `codex`, shan also reconciles the Codex mirror directories.
+
+## Configure agents
+
+Shan keeps Claude as the canonical outfit and can mirror that active set to Codex as an exact symlink-only view.
+
+The default config is:
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "agents": "auto"
+  }
+}
+```
+
+Put that in `~/.config/shan/config.json`.
+
+`"auto"` probes `claude` and `codex` on `PATH`, then caches the detected set in `~/.local/shan/cache.json` for 24 hours.
+
+To pin the enabled set explicitly:
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "agents": ["claude", "codex"]
+  }
+}
+```
+
+After the next shan skill mutation, if the resolved agent set includes `codex`, these mirror directories will be reconciled to match the canonical Claude outfit:
+
+- `~/.codex/skills/`
+- `.codex/skills/`
+
+Shan owns the contents of mirrored directories completely. Do not keep Codex-only skills there.
+
+## Import from skills.sh
+
+Import skills from any `skills.sh` source into shan's own library/outfit model:
+
+```sh
+bun run shan -- skills install vercel-labs/agent-skills --skill typed-api-dx-review
+bun run shan -- skills install vercel-labs/agent-skills --all --scope user
+```
+
+The importer is intentionally non-interactive: pass one or more `--skill` flags or `--all`. Imported skills are converted into shan-managed pluggable skills immediately, so `undo`, `move`, `doctor`, and agent mirrors keep working normally.
 
 ## First use: dump a transcript
 
@@ -69,6 +118,7 @@ The output shows core skills (always active), pluggable-on skills (symlinked fro
 
 - `transcript dump` parsed the JSONL session file using Effect Schema, extracted entry types and summaries, and wrote formatted Markdown
 - `skills list` read `~/.claude/shan/state.json` and the outfit/library directories to compute the effective skill set
+- Resolved non-Claude agents are projected from the canonical Claude outfit rather than managed separately
 - Both commands resolved file paths from Claude Code's standard locations (`~/.claude/projects/`, `~/.claude/skills/`)
 
 ## Running from the repo

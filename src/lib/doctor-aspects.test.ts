@@ -1,11 +1,11 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
 import { mkdir, readlink, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Aspects from './doctor-aspects.js'
 import * as Lib from './skill-library.js'
 
-const run = <A>(effect: Effect.Effect<A>) => Effect.runPromise(effect)
+const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 const tmpBase = path.join(import.meta.dir, '__test_doctor_tmp__')
 
 // ── Helper: create a minimal DoctorContext ────────────────────────
@@ -1498,7 +1498,6 @@ describe('cross-scope-install fix execution', () => {
   const aspect = Aspects.ALL_ASPECTS.find((a) => a.name === 'cross-scope-install')!
 
   test('fix removes user cross-scope symlink', async () => {
-    const dir = path.join(tmpBase, 'cross-fix-exec')
     const userOutfitDir = Lib.outfitDir('user')
     const linkPath = path.join(userOutfitDir, '__test_cross_scope__')
     try {

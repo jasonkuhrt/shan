@@ -45,6 +45,8 @@ export const skillsRedo = (n: number, scope: Lib.Scope) =>
     history.undoneCount -= redoCount
     updatedState = Lib.setProjectHistory(updatedState, scope, history)
     yield* Lib.saveState(updatedState)
+    yield* Lib.syncAgentMirrors('user')
+    yield* Lib.syncAgentMirrors('project')
 
     yield* Console.log(`Redone ${redoCount} operation${redoCount > 1 ? 's' : ''}.`)
   })
@@ -85,9 +87,9 @@ const redoOnOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OnOp' }, scope: Li
       // Only use the scope-appropriate library (no cross-scope fallthrough)
       const libDir = Lib.scopeLibraryDir(scope)
       const libPath = path.join(libDir, relPath)
-      const libExists = yield* Effect.tryPromise(() => lstat(libPath).then((s) => s.isDirectory())).pipe(
-        Effect.catchAll(() => Effect.succeed(false)),
-      )
+      const libExists = yield* Effect.tryPromise(() =>
+        lstat(libPath).then((s) => s.isDirectory()),
+      ).pipe(Effect.catchAll(() => Effect.succeed(false)))
       if (libExists) {
         yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(
           Effect.catchAll(() => Effect.void),
@@ -157,7 +159,6 @@ const redoMoveOp = (entry: Lib.HistoryEntry & { readonly _tag: 'MoveOp' }) =>
     }
   })
 
-
 /** Replay a single sub-action from a composite move. */
 const replaySubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> => {
   // Filesystem moves: execute the original move
@@ -189,9 +190,9 @@ const replaySubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> =>
         const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
         const libPath = path.join(libDir, relPath)
-        const exists = yield* Effect.tryPromise(() => lstat(libPath).then((s) => s.isDirectory())).pipe(
-          Effect.catchAll(() => Effect.succeed(false)),
-        )
+        const exists = yield* Effect.tryPromise(() =>
+          lstat(libPath).then((s) => s.isDirectory()),
+        ).pipe(Effect.catchAll(() => Effect.succeed(false)))
         if (exists) {
           yield* Effect.tryPromise(() => mkdir(path.dirname(linkPath), { recursive: true }))
           yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(

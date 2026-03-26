@@ -11,7 +11,13 @@
  * - Top consumers are ranked by delta tokens (context consumption per request)
  */
 
-import type { TranscriptEntry, AssistantEntry, UserEntry, Usage } from './transcript-schema.js'
+import type {
+  TranscriptEntry,
+  AssistantEntry,
+  UserEntry,
+  Usage,
+  ToolUseBlock,
+} from './transcript-schema.js'
 import { decodeToolInput } from './transcript-schema.js'
 
 // -----------------------------------------------------------------------------
@@ -171,18 +177,23 @@ const extractSkillFromUser = (entry: UserEntry, previousSkill: string | null): S
 
 const extractSkillFromTool = (tools: string[], entry: AssistantEntry): string | null => {
   if (!tools.includes('Skill')) return null
+  const block = entry.message.content.find(
+    (candidate): candidate is ToolUseBlock =>
+      candidate.type === 'tool_use' && candidate.name === 'Skill',
+  )
+  if (!block) return null
 
-  for (const block of entry.message.content) {
-    if (block.type === 'tool_use' && block.name === 'Skill') {
-      const input = decodeToolInput(block)
-      if (typeof input === 'object' && input !== null && 'skill' in input) {
-        const skillVal = (input as Record<string, unknown>)['skill']
-        return typeof skillVal === 'string' ? skillVal : null
-      }
-      return null
-    }
+  const input = decodeToolInput(block)
+  if (
+    typeof input !== 'object' ||
+    input === null ||
+    !('skill' in input) ||
+    typeof input['skill'] !== 'string'
+  ) {
+    return null
   }
-  return null
+
+  return input['skill']
 }
 
 const checkTruncated = (entry: UserEntry): boolean => {

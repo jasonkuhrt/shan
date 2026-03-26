@@ -1,10 +1,13 @@
 # Lucid Generation Plan
 
 ## Archetype: CLI tool
+
 ## Voice: Technical, concise, second person "you", present tense. Direct and functional. No exclamation points. No emoji.
+
 ## One-liner: Dump Claude Code transcripts, open task files, and toggle skill outfits from the terminal.
 
 ## Content Plan
+
 - [x] Phase 1: Autosearch
 - [x] Phase 2.1: One-liner
 - [x] Phase 2.2: How-to guides (3 guides)
@@ -15,11 +18,12 @@
 - [x] Phase 2.7: Optional content (glossary)
 - [x] Phase 2.8: Landing page (index.mdx)
 - [x] Phase 3: Verify + Review
-- [x] Phase 4: Output (content/docs/*.mdx + Fumadocs site)
+- [x] Phase 4: Output (content/docs/\*.mdx + Fumadocs site)
 
 ## Findings
 
 ### Project Identity
+
 - **Name**: shan (named after Claude Shannon)
 - **Package**: @jasonkuhrt/shan
 - **License**: MIT
@@ -29,6 +33,7 @@
 - **CLI structure**: hand-rolled argument parser in src/bin/shan.ts (no argc, no commander)
 
 ### Three Namespaces
+
 1. **transcript** — inspect/export Claude Code session transcripts
    - `print` — readable conversation log with optional detail layers (results, diffs, thinking, trace)
    - `dump` — JSONL → navigable Markdown with columnar headings for editor outlines
@@ -48,6 +53,7 @@
    - `migrate` — run data migrations
 
 ### Domain Vocabulary
+
 - **outfit**: the set of active skills Claude Code sees (symlinks in `~/.claude/skills/` or `.claude/skills/`)
 - **library**: all available pluggable skills (`~/.claude/skills-library/` or `.claude/skills-library/`)
 - **core**: real directory in outfit — shan never touches it
@@ -59,11 +65,14 @@
 - **router**: generated `.claude/skills/<group>/SKILL.md` that routes to sub-skills
 
 ### Public Library Exports
+
 - `@jasonkuhrt/shan` → task-schema + transcript-schema (Effect Schema definitions)
 - `@jasonkuhrt/shan/transcript-schema` → transcript-schema only
 
 ### Bundled Skills
+
 Ships 5 bundled Claude Code skills:
+
 - `shan` — top-level router for all shan commands
 - `skills` — router for skill management sub-skills
 - `skills:change` — mutations (on/off/move/undo/redo)
@@ -71,11 +80,13 @@ Ships 5 bundled Claude Code skills:
 - `skills:list` — read-only views
 
 ### Target Resolution
+
 - Session targets: UUID/prefix, file path, or interactive picker (TTY)
 - Task targets: list name, UUID prefix, list@N, @subject-search, or picker
 - Skill targets: comma-separated colon-syntax names, supports groups
 
 ### Key Files
+
 - `src/bin/shan.ts` — CLI entry point
 - `src/lib/skill-library.ts` — core skill management logic (~60+ exports)
 - `src/lib/transcript-schema.ts` — Effect Schema for transcript entries
@@ -88,6 +99,7 @@ Ships 5 bundled Claude Code skills:
 - `src/lib/viz/` — chart, dimension track, and legend rendering
 
 ### Managed Locations
+
 - `~/.claude/shan/config.json` — shan config
 - `~/.claude/shan/state.json` — shan state (current installs, history)
 - `~/.claude/skills-library/` — user-level library
@@ -96,12 +108,15 @@ Ships 5 bundled Claude Code skills:
 - `.claude/skills/` — project-level outfit
 
 ## Backlog
+
 - [ ] Homepage (`/`) returns 404 — needs an `app/page.tsx` that redirects to `/docs` or shows a landing page
 
 ## Exemplars
+
 None found in sibling projects.
 
 ## Quality Scores (Mechanical Verification)
+
 - Banned words found: 0
 - Banned phrases found: 0
 - Internal links valid: 12/12

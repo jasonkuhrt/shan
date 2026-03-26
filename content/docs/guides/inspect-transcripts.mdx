@@ -2,7 +2,7 @@
 title: Inspect transcripts
 description: Print, dump, and analyze Claude Code session transcripts.
 lucid_generated: true
-generated_at: "2026-03-16T00:00:00Z"
+generated_at: '2026-03-16T00:00:00Z'
 source_files:
   - src/bin/shan.ts
   - src/bin/transcript/print.ts
@@ -49,7 +49,9 @@ shan transcript dump dc8ffe42
 
 ```markdown
 # `001` `01/25/2026 22:45` `file-history-snapshot` `snapshot______________________`
+
 # `002` `01/25/2026 22:45` `user_________________` `i noticed there is a dangerous`
+
 # `003` `01/25/2026 22:46` `assistant____________` `Bash ×2, Read_________________`
 ```
 
@@ -87,11 +89,11 @@ The charts use `▁▂▃▄▅▆▇█` block characters for sub-row precision
 
 All transcript commands accept the same target syntax:
 
-| Form | Example | Resolves to |
-|------|---------|-------------|
-| Session ID | `dc8ffe42` | Prefix match against session UUIDs |
-| Full UUID | `9ba30f6f-...` | Exact match |
-| File path | `./file.jsonl` | Direct file |
-| _(omit)_ | | Interactive picker (TTY required) |
+| Form       | Example        | Resolves to                        |
+| ---------- | -------------- | ---------------------------------- |
+| Session ID | `dc8ffe42`     | Prefix match against session UUIDs |
+| Full UUID  | `9ba30f6f-...` | Exact match                        |
+| File path  | `./file.jsonl` | Direct file                        |
+| _(omit)_   |                | Interactive picker (TTY required)  |
 
 The interactive picker shows sessions for the current project. Use `--all` to include sessions from all projects.

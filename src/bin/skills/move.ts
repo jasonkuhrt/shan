@@ -118,6 +118,8 @@ export const skillsMove = (
     }
     const finalState = Lib.setProjectHistory(updatedState, options.scope, history)
     yield* Lib.saveState(finalState)
+    yield* Lib.syncAgentMirrors('user', config)
+    yield* Lib.syncAgentMirrors('project', config)
 
     // Report results
     yield* Lib.reportResults(Lib.batchToRows(batch, toRow))

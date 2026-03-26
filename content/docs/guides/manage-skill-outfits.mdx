@@ -1,8 +1,8 @@
 ---
 title: Manage skill outfits
-description: Toggle skills on and off, move between scopes, undo changes, and run health checks.
+description: Toggle skills on and off, import from skills.sh, mirror active outfits to other agents, and run health checks.
 lucid_generated: true
-generated_at: "2026-03-16T00:00:00Z"
+generated_at: '2026-03-16T00:00:00Z'
 source_files:
   - src/bin/shan.ts
   - src/bin/skills/on.ts
@@ -10,6 +10,7 @@ source_files:
   - src/bin/skills/move.ts
   - src/bin/skills/undo.ts
   - src/bin/skills/redo.ts
+  - src/bin/skills/install.ts
   - src/lib/skill-library.ts
   - src/bundled-skills/skills/change/SKILL.md
 ---
@@ -26,6 +27,49 @@ The output groups skills by scope and status:
 - **Pluggable on (user)** / **Pluggable on (project)** — symlinks from outfit to library, with character cost
 - **Pluggable off** — in the library but not currently equipped
 - **Budget** — total approximate character cost of all model-visible skills against Claude Code's character budget
+- **Agent mirrors** — optional mirror directories shan keeps in sync with the canonical Claude outfit
+
+## Mirror active skills to other agents
+
+Shan keeps Claude Code as the canonical outfit:
+
+- `~/.claude/skills/`
+- `.claude/skills/`
+
+Other agents can be configured as exact symlink-only mirrors of that active set. Today the built-in agent names are `claude` and `codex`, with Claude remaining canonical.
+
+Default config:
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "agents": "auto"
+  }
+}
+```
+
+Put that in `~/.config/shan/config.json`.
+
+`"auto"` probes `claude` and `codex` on `PATH`, then caches the detected set in `~/.local/shan/cache.json` for 24 hours.
+
+To pin the enabled set explicitly:
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "agents": ["claude", "codex"]
+  }
+}
+```
+
+When the resolved agent set includes `codex`, every shan skill mutation reconciles these generated views:
+
+- `~/.codex/skills/`
+- `.codex/skills/`
+
+Mirrored directories are fully owned by shan. Do not keep Codex-only skills there; shan will replace the contents to match the canonical Claude outfit exactly.
 
 ## Turn skills on
 
@@ -73,6 +117,26 @@ shan skills move commitment down playwright    # core → pluggable (move to lib
 ```
 
 `commitment up` copies the library skill into the outfit as a real directory — shan stops managing it. `commitment down` moves a core directory into the library and creates a symlink.
+
+## Import skills from skills.sh
+
+Use shan's importer when you want external skills to become first-class shan-managed skills instead of a separate install system:
+
+```sh
+shan skills install vercel-labs/agent-skills --skill typed-api-dx-review
+shan skills install vercel-labs/agent-skills --skill playwright --skill linear
+shan skills install vercel-labs/agent-skills --all --scope user
+```
+
+The importer is intentionally non-interactive: pass one or more `--skill` flags or `--all`.
+
+Behavior:
+
+- installs into the canonical Claude outfit first
+- normalizes the imported skill names into shan's naming/layout
+- converts the imported skills into pluggable library entries
+- generates namespace routers when needed
+- reconciles any configured agent mirrors afterward
 
 ## Undo and redo
 

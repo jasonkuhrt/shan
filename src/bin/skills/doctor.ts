@@ -112,6 +112,8 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
         }
         const newState = Lib.setProjectHistory(freshState, 'project', history)
         yield* Lib.saveState(newState)
+        yield* Lib.syncAgentMirrors('user', config)
+        yield* Lib.syncAgentMirrors('project', config)
       }
     } else {
       // Report-only mode

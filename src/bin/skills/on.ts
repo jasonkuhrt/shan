@@ -202,6 +202,7 @@ export const skillsOn = (targetInput: string, options: SkillsOnOptions) =>
     }
     updatedState = Lib.setProjectHistory(updatedState, options.scope, history)
     yield* Lib.saveState(updatedState)
+    yield* Lib.syncAgentMirrors(options.scope, config)
 
     // Report results
     yield* Lib.reportResults(Lib.batchToRows(batch, toRow))

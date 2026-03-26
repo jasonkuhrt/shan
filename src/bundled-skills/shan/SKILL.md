@@ -24,10 +24,10 @@ Render a transcript as a readable conversation log — user messages, Claude's p
 
 **Arguments:**
 
-| Argument   | Description                                                                    |
-| ---------- | ------------------------------------------------------------------------------ |
-| `[target]` | Session ID/prefix, file path, or omit for interactive picker.                  |
-| `--show`   | Add detail layers: `results`, `diffs`, `thinking`, `trace`, `all` (CSV list).  |
+| Argument   | Description                                                                   |
+| ---------- | ----------------------------------------------------------------------------- |
+| `[target]` | Session ID/prefix, file path, or omit for interactive picker.                 |
+| `--show`   | Add detail layers: `results`, `diffs`, `thinking`, `trace`, `all` (CSV list). |
 
 **Output:** `.claude/transcripts/<session-id>.print.md`
 
@@ -211,4 +211,3 @@ Run aspect-based health checks. Default: detect + auto-fix. Use `--no-fix` for r
 shan skills doctor                             # detect + auto-fix
 shan skills doctor --no-fix                    # report only
 ```
-

@@ -2,7 +2,7 @@
 title: Work with tasks
 description: Dump and open Claude Code task files from the terminal.
 lucid_generated: true
-generated_at: "2026-03-16T00:00:00Z"
+generated_at: '2026-03-16T00:00:00Z'
 source_files:
   - src/bin/shan.ts
   - src/bin/task/dump.ts
@@ -60,10 +60,10 @@ Opens in `$EDITOR` (defaults to Zed).
 
 ## Target syntax
 
-| Form | Example | Resolves to |
-|------|---------|-------------|
-| Named list | `test-schema` | Exact match on list name |
-| UUID prefix | `21b0` | Prefix match against session UUIDs |
-| List + task | `test-schema@3` | Task #3 in named list |
-| Subject search | `@Scaffold` | First task with "Scaffold" in subject |
-| _(omit)_ | | Interactive picker (TTY required) |
+| Form           | Example         | Resolves to                           |
+| -------------- | --------------- | ------------------------------------- |
+| Named list     | `test-schema`   | Exact match on list name              |
+| UUID prefix    | `21b0`          | Prefix match against session UUIDs    |
+| List + task    | `test-schema@3` | Task #3 in named list                 |
+| Subject search | `@Scaffold`     | First task with "Scaffold" in subject |
+| _(omit)_       |                 | Interactive picker (TTY required)     |

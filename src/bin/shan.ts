@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * shan - Claude Code tooling CLI (named after Claude Shannon)
+ * shan - agent tooling CLI (named after Claude Shannon)
  *
  * Usage:
  *   shan <namespace> <command> [args...]
@@ -26,6 +26,7 @@ import { skillsRedo } from './skills/redo.js'
 import { skillsDoctor } from './skills/doctor.js'
 import { skillsMigrate } from './skills/migrate.js'
 import { skillsMove } from './skills/move.js'
+import { skillsInstall } from './skills/install.js'
 import { skillsInstallUser } from './skills/install-user.js'
 import { skillsCreate } from './skills/create.js'
 import { lintHooks } from './lint/hooks.js'
@@ -35,7 +36,7 @@ import type { MoveAxis, MoveDirection } from './skills/move.js'
 import type { Scope } from '../lib/skill-library.js'
 
 const USAGE = `
-shan - Claude Code tooling CLI
+shan - agent tooling CLI
 
 Usage:
   shan <namespace> <command> [target] [options]
@@ -66,6 +67,7 @@ Commands:
   shan skills redo [N]                  Redo last N undone operations (default: 1)
   shan skills doctor                    Run health checks
   shan skills create <name>             Scaffold a new skill with SKILL.md template
+  shan skills install <source>          Import skills from skills.sh into shan
   shan skills install-user              Install bundled shan skills at user scope
 
   shan lint hooks                       Check hook/statusLine paths in settings
@@ -100,18 +102,20 @@ Available commands:
   redo [N]                  Redo last N undone operations
   doctor [--no-fix]         Run health checks
   create <name>             Scaffold a new skill with SKILL.md template
+  install <source>          Import skills from skills.sh into shan
   migrate [--execute]       Migrate from flat inventory to hierarchical library
   install-user              Install bundled shan skills at user scope
 
 Options:
   --scope user | --global   Operate on user outfit (default: project)
   --strict                  Report no-ops as errors
+  --skill <name>            Select specific skills for skills install
 `.trim()
 
 /**
  * Parse args, extracting known flags and returning the remaining positional args.
  */
-interface ParsedFlags {
+export interface ParsedFlags {
   raw: boolean
   all: boolean
   md: boolean
@@ -120,10 +124,11 @@ interface ParsedFlags {
   global: boolean
   noFix: boolean
   show: string[]
+  skill: string[]
   scope: string
 }
 
-const parseArgs = (args: string[]) => {
+export const parseArgs = (args: string[]) => {
   const flags: ParsedFlags = {
     raw: false,
     all: false,
@@ -133,6 +138,7 @@ const parseArgs = (args: string[]) => {
     global: false,
     noFix: false,
     show: [],
+    skill: [],
     scope: '',
   }
   const positional: string[] = []
@@ -147,7 +153,10 @@ const parseArgs = (args: string[]) => {
     else if (arg === '--strict') flags.strict = true
     else if (arg === '--global') flags.global = true
     else if (arg === '--no-fix') flags.noFix = true
-    else if (arg === '--scope' && i + 1 < args.length) {
+    else if (arg.startsWith('--skill=')) flags.skill.push(arg.slice(8))
+    else if (arg === '--skill' && i + 1 < args.length) {
+      flags.skill.push(args[++i] ?? '')
+    } else if (arg === '--scope' && i + 1 < args.length) {
       flags.scope = args[++i] ?? ''
     } else if (arg.startsWith('--scope=')) {
       flags.scope = arg.slice(8)
@@ -160,10 +169,10 @@ const parseArgs = (args: string[]) => {
   return { flags, positional }
 }
 
-const resolveScope = (flags: ParsedFlags): Scope =>
+export const resolveScope = (flags: ParsedFlags): Scope =>
   flags.global ? 'user' : flags.scope === 'user' ? 'user' : 'project'
 
-const program = Effect.gen(function* () {
+export const program = Effect.gen(function* () {
   const [namespace, command, ...args] = process.argv.slice(2)
 
   if (!namespace) {
@@ -234,6 +243,12 @@ const program = Effect.gen(function* () {
       yield* skillsMigrate({ execute: flags.execute })
     } else if (command === 'create') {
       yield* skillsCreate(positional[0] ?? '', { scope })
+    } else if (command === 'install') {
+      yield* skillsInstall(positional[0] ?? '', {
+        scope,
+        all: flags.all,
+        skills: flags.skill,
+      })
     } else if (command === 'install-user') {
       yield* skillsInstallUser()
     } else {
@@ -247,7 +262,9 @@ const program = Effect.gen(function* () {
       yield* Console.log('lint: no settings files found')
       return
     }
-    yield* Console.log(`lint: checking ${ctx.settingsFiles.length} settings file${ctx.settingsFiles.length > 1 ? 's' : ''}...`)
+    yield* Console.log(
+      `lint: checking ${ctx.settingsFiles.length} settings file${ctx.settingsFiles.length > 1 ? 's' : ''}...`,
+    )
     yield* Console.log('')
 
     // Collect findings from requested (or all) rules
@@ -261,7 +278,9 @@ const program = Effect.gen(function* () {
 
     if (findings === null) {
       yield* Console.error(`Unknown lint command: ${command}`)
-      yield* Console.log('\nAvailable commands:\n  hooks    Check hook/statusLine paths in settings')
+      yield* Console.log(
+        '\nAvailable commands:\n  hooks    Check hook/statusLine paths in settings',
+      )
       return yield* Effect.fail(new Error('Unknown command'))
     }
 
@@ -280,7 +299,7 @@ const program = Effect.gen(function* () {
   }
 })
 
-const QUIET_ERRORS = new Set([
+export const QUIET_ERRORS = new Set([
   'Unknown command',
   'Unknown namespace',
   'Missing targets',
@@ -290,7 +309,7 @@ const QUIET_ERRORS = new Set([
   'Lint errors found',
 ])
 
-const run = async () => {
+export const run = async () => {
   try {
     await Effect.runPromise(program)
   } catch (err: unknown) {
@@ -301,4 +320,6 @@ const run = async () => {
   }
 }
 
-void run()
+if (import.meta.main) {
+  void run()
+}

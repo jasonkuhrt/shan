@@ -2,7 +2,7 @@
 title: What is shan?
 description: Shan's three namespaces, skill management model, and transcript processing.
 lucid_generated: true
-generated_at: "2026-03-16T00:00:00Z"
+generated_at: '2026-03-16T00:00:00Z'
 source_files:
   - package.json
   - README.md
@@ -36,13 +36,13 @@ Shan introduces a **library** layer behind each outfit. The library (`~/.claude/
 
 This two-layer model creates a vocabulary:
 
-| Term | Meaning |
-|------|---------|
-| **outfit** | Active skills Claude Code sees — the symlinks in `skills/` |
-| **library** | All available skills — the real files in `skills-library/` |
-| **core** | A real directory in the outfit that shan never touches |
-| **pluggable** | A symlink managed by shan — can be toggled on and off |
-| **scope** | `user` (global) or `project` (repo-local) |
+| Term           | Meaning                                                              |
+| -------------- | -------------------------------------------------------------------- |
+| **outfit**     | Active skills Claude Code sees — the symlinks in `skills/`           |
+| **library**    | All available skills — the real files in `skills-library/`           |
+| **core**       | A real directory in the outfit that shan never touches               |
+| **pluggable**  | A symlink managed by shan — can be toggled on and off                |
+| **scope**      | `user` (global) or `project` (repo-local)                            |
 | **commitment** | `core` (ejected, real files) or `pluggable` (symlinked from library) |
 
 Skills use colon-syntax for hierarchical names: `ts:tooling`, `flo:next`. Targeting a group name (like `ts`) includes all descendant leaves.

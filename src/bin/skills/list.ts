@@ -31,6 +31,9 @@ interface GridItem {
 
 export const skillsList = () =>
   Effect.gen(function* () {
+    const config = yield* Lib.loadConfig()
+    const configuredAgents = yield* Lib.resolveConfiguredAgents(config)
+    const mirrorAgents = Lib.getMirrorAgents(configuredAgents)
     const userOutfit = yield* Lib.listOutfit('user')
     const projectOutfit = yield* Lib.listOutfit('project')
     const library = yield* Lib.listLibrary()
@@ -119,6 +122,17 @@ export const skillsList = () =>
         ? `  via SLASH_COMMAND_TOOL_CHAR_BUDGET`
         : `  default ${DEFAULT_CHAR_BUDGET.toLocaleString()} · override with SLASH_COMMAND_TOOL_CHAR_BUDGET`,
     )
+
+    if (mirrorAgents.length > 0) {
+      yield* Console.log('')
+      yield* Console.log('Agent mirrors:')
+      for (const mirrorAgent of mirrorAgents) {
+        yield* Console.log(`  ${mirrorAgent} (user)    ${Lib.agentOutfitDir('user', mirrorAgent)}`)
+        yield* Console.log(
+          `  ${mirrorAgent} (project) ${Lib.agentOutfitDir('project', mirrorAgent)}`,
+        )
+      }
+    }
   })
 
 /** Print names grouped by namespace prefix, standalone items listed individually. */

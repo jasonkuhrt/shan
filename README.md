@@ -2,7 +2,7 @@
 
 [![trunk](https://github.com/jasonkuhrt/shan/actions/workflows/trunk.yaml/badge.svg)](https://github.com/jasonkuhrt/shan/actions/workflows/trunk.yaml)
 
-Dump Claude Code transcripts, open task files, and toggle skill outfits from the terminal.
+Dump Claude Code transcripts, open task files, import skills from `skills.sh`, and mirror active outfits to other agents.
 
 Named after Claude Shannon.
 
@@ -59,6 +59,7 @@ shan skills history                            # operation log
 shan skills undo                               # undo last operation
 shan skills redo                               # redo last undone
 shan skills doctor                             # 13-aspect health checks + auto-fix
+shan skills install vercel-labs/agent-skills --skill typed-api-dx-review
 shan skills install-user                       # install bundled shan skills
 ```
 
@@ -80,18 +81,54 @@ Skill targets: comma-separated colon-syntax names (e.g. `ts:tooling,playwright`)
 
 **Commitment** — `core` (real directory, shan never touches) or `pluggable` (symlink managed by shan).
 
+**Agent config** — `~/.config/shan/config.json` controls which agent views shan should keep enabled. Claude remains the canonical backing store; non-Claude agents are exact generated mirrors.
+
 Every mutation records a snapshot for `undo`/`redo`. `doctor` runs 13 diagnostic aspects with auto-fix.
+
+Default config:
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "agents": "auto"
+  }
+}
+```
+
+`"auto"` probes `claude` and `codex` on `PATH`, then caches the installed set in `~/.local/shan/cache.json` for 24 hours.
+
+Pin the enabled set explicitly:
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "agents": ["claude", "codex"]
+  }
+}
+```
+
+Import `skills.sh` skills into shan's own library/outfit model:
+
+```sh
+shan skills install vercel-labs/agent-skills --skill typed-api-dx-review
+shan skills install vercel-labs/agent-skills --all --scope user
+```
 
 ## Managed locations
 
-| Path | Purpose |
-|------|---------|
-| `~/.claude/shan/config.json` | Configuration |
-| `~/.claude/shan/state.json` | Current installs, operation history |
-| `~/.claude/skills-library/` | User skill library |
-| `~/.claude/skills/` | User outfit |
-| `.claude/skills-library/` | Project skill library |
-| `.claude/skills/` | Project outfit |
+| Path                         | Purpose                                                    |
+| ---------------------------- | ---------------------------------------------------------- |
+| `~/.config/shan/config.json` | Configuration                                              |
+| `~/.local/shan/cache.json`   | Cached `skills.agents: "auto"` agent detection             |
+| `~/.claude/shan/state.json`  | Current installs, operation history                        |
+| `~/.claude/skills-library/`  | User skill library                                         |
+| `~/.claude/skills/`          | Canonical user outfit                                      |
+| `~/.codex/skills/`           | User mirror outfit when resolved agents include `codex`    |
+| `.claude/skills-library/`    | Project skill library                                      |
+| `.claude/skills/`            | Canonical project outfit                                   |
+| `.codex/skills/`             | Project mirror outfit when resolved agents include `codex` |
 
 ## Development
 
@@ -99,7 +136,14 @@ Every mutation records a snapshot for `undo`/`redo`. `doctor` runs 13 diagnostic
 just install          # bun install
 just test             # bun test
 just check            # format + lint + types + test + coverage + package + exports + CI
+just coverage         # enforce 95% overall lines/functions coverage
 just run skills list  # run shan from repo
+```
+
+Raw coverage table:
+
+```sh
+bun run test:coverage
 ```
 
 ## Docs

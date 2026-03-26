@@ -92,11 +92,6 @@ const formatDuration = (ms: number): string => {
 }
 
 const niceScale = (max: number, targetRows: number): number[] => {
-  // Handle edge case where max is very small
-  if (max < 1) {
-    return Array.from({ length: targetRows }, (_, i) => i + 1)
-  }
-
   // Find a nice step size that produces at least targetRows
   const rawStep = max / targetRows
   const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)))

@@ -32,7 +32,10 @@ const setupTestEnv = async (): Promise<TestEnv> => {
       stdout: 'pipe',
       stderr: 'pipe',
     })
-    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
     const exitCode = await proc.exited
     return { stdout, stderr, exitCode }
   }
@@ -47,8 +50,10 @@ const setupTestEnv = async (): Promise<TestEnv> => {
     project,
     run,
     writeUserSettings: (data) => writeSettings(path.join(home, '.claude', 'settings.json'), data),
-    writeProjectSettings: (data) => writeSettings(path.join(project, '.claude', 'settings.json'), data),
-    writeProjectLocalSettings: (data) => writeSettings(path.join(project, '.claude', 'settings.local.json'), data),
+    writeProjectSettings: (data) =>
+      writeSettings(path.join(project, '.claude', 'settings.json'), data),
+    writeProjectLocalSettings: (data) =>
+      writeSettings(path.join(project, '.claude', 'settings.local.json'), data),
     cleanup: () => rm(base, { recursive: true, force: true }),
   }
 }
@@ -85,7 +90,9 @@ describe('shan lint hooks', () => {
     const env = await setupTestEnv()
     await env.writeUserSettings({
       hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: '~/.claude/hooks/scripts/foo.sh', timeout: 5 }] }],
+        Stop: [
+          { hooks: [{ type: 'command', command: '~/.claude/hooks/scripts/foo.sh', timeout: 5 }] },
+        ],
       },
     })
     try {
@@ -102,7 +109,10 @@ describe('shan lint hooks', () => {
     await env.writeProjectSettings({
       hooks: {
         PreToolUse: [
-          { matcher: 'Bash', hooks: [{ type: 'command', command: '/usr/local/bin/hook.sh', timeout: 5 }] },
+          {
+            matcher: 'Bash',
+            hooks: [{ type: 'command', command: '/usr/local/bin/hook.sh', timeout: 5 }],
+          },
         ],
       },
     })
@@ -120,7 +130,15 @@ describe('shan lint hooks', () => {
     await env.writeProjectSettings({
       hooks: {
         Stop: [
-          { hooks: [{ type: 'command', command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/foo.sh', timeout: 5 }] },
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/foo.sh',
+                timeout: 5,
+              },
+            ],
+          },
         ],
       },
     })
@@ -137,7 +155,9 @@ describe('shan lint hooks', () => {
     const env = await setupTestEnv()
     await env.writeUserSettings({
       hooks: {
-        PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'jq .foo', timeout: 5 }] }],
+        PreToolUse: [
+          { matcher: 'Bash', hooks: [{ type: 'command', command: 'jq .foo', timeout: 5 }] },
+        ],
       },
     })
     try {
@@ -169,7 +189,9 @@ describe('shan lint hooks', () => {
     const env = await setupTestEnv()
     await env.writeProjectSettings({
       hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: '.claude/hooks/scripts/foo.sh', timeout: 10 }] }],
+        Stop: [
+          { hooks: [{ type: 'command', command: '.claude/hooks/scripts/foo.sh', timeout: 10 }] },
+        ],
       },
     })
     try {
@@ -188,7 +210,10 @@ describe('shan lint hooks', () => {
     await env.writeProjectSettings({
       hooks: {
         PreToolUse: [
-          { matcher: 'Bash', hooks: [{ type: 'command', command: './scripts/guard.sh', timeout: 5 }] },
+          {
+            matcher: 'Bash',
+            hooks: [{ type: 'command', command: './scripts/guard.sh', timeout: 5 }],
+          },
         ],
       },
     })
@@ -206,7 +231,9 @@ describe('shan lint hooks', () => {
     const env = await setupTestEnv()
     await env.writeProjectSettings({
       hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: 'node .claude/hooks/check.js', timeout: 10 }] }],
+        Stop: [
+          { hooks: [{ type: 'command', command: 'node .claude/hooks/check.js', timeout: 10 }] },
+        ],
       },
     })
     try {

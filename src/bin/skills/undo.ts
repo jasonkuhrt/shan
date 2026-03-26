@@ -41,6 +41,8 @@ export const skillsUndo = (n: number, scope: Lib.Scope) =>
     history.undoneCount += undoCount
     updatedState = Lib.setProjectHistory(updatedState, scope, history)
     yield* Lib.saveState(updatedState)
+    yield* Lib.syncAgentMirrors('user')
+    yield* Lib.syncAgentMirrors('project')
 
     yield* Console.log(`Restored outfit to ${undoCount} operation${undoCount > 1 ? 's' : ''} ago.`)
   })
@@ -64,7 +66,6 @@ const undoMoveOp = (entry: Lib.HistoryEntry & { readonly _tag: 'MoveOp' }) =>
       yield* undoSubAction(sub)
     }
   })
-
 
 /** Reverse a single sub-action from a composite move. */
 const undoSubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> => {

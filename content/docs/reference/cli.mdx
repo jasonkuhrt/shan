@@ -2,7 +2,7 @@
 title: CLI Reference
 description: Every command, flag, argument, and managed location.
 lucid_generated: true
-generated_at: "2026-03-16T00:00:00Z"
+generated_at: '2026-03-16T00:00:00Z'
 source_files:
   - src/bin/shan.ts
   - src/bin/transcript/print.ts
@@ -19,6 +19,7 @@ source_files:
   - src/bin/skills/redo.ts
   - src/bin/skills/doctor.ts
   - src/bin/skills/migrate.ts
+  - src/bin/skills/install.ts
   - src/bin/skills/install-user.ts
 ---
 
@@ -28,12 +29,13 @@ shan <namespace> <command> [target] [options]
 
 ## Global options
 
-| Flag | Description |
-|------|-------------|
-| `--all` | Show all sessions/task lists, not just the current project |
-| `--scope user` | Operate on user-level outfit/library (default: project) |
-| `--global` | Alias for `--scope user` |
-| `--strict` | Treat no-ops (already on, already off) as errors |
+| Flag             | Description                                                |
+| ---------------- | ---------------------------------------------------------- |
+| `--all`          | Show all sessions/task lists, not just the current project |
+| `--scope user`   | Operate on user-level outfit/library (default: project)    |
+| `--global`       | Alias for `--scope user`                                   |
+| `--skill <name>` | Select specific skills for `skills install` (repeatable)   |
+| `--strict`       | Treat no-ops (already on, already off) as errors           |
 
 ## Transcript namespace
 
@@ -43,8 +45,8 @@ Render a session transcript as a readable conversation log. User messages, Claud
 
 **Output**: `.claude/transcripts/<session-id>.print.md`
 
-| Flag | Values | Description |
-|------|--------|-------------|
+| Flag     | Values                                         | Description                         |
+| -------- | ---------------------------------------------- | ----------------------------------- |
 | `--show` | `results`, `diffs`, `thinking`, `trace`, `all` | Add detail layers (comma-separated) |
 
 `--show` layers are additive:
@@ -68,8 +70,8 @@ Transform JSONL transcript into navigable Markdown with columnar H1 headings.
 
 **Output**: `.claude/transcripts/<session-id>.transcript.md`
 
-| Flag | Description |
-|------|-------------|
+| Flag    | Description                                |
+| ------- | ------------------------------------------ |
 | `--raw` | Copy original JSONL without transformation |
 
 Headings use fixed-width columns padded with underscores for editor outline alignment:
@@ -78,12 +80,12 @@ Headings use fixed-width columns padded with underscores for editor outline alig
 # `001` `01/25/2026 22:45` `user_________________` `i noticed there is a dangerous`
 ```
 
-| Column | Width | Content |
-|--------|-------|---------|
-| n | 3 chars | Entry number, zero-padded |
-| time | 16 chars | Timestamp as mm/dd/yyyy hh:mm |
-| type | 21 chars | Entry type |
-| summary | 30 chars | Type-specific summary |
+| Column  | Width    | Content                       |
+| ------- | -------- | ----------------------------- |
+| n       | 3 chars  | Entry number, zero-padded     |
+| time    | 16 chars | Timestamp as mm/dd/yyyy hh:mm |
+| type    | 21 chars | Entry type                    |
+| summary | 30 chars | Type-specific summary         |
 
 Summary extraction varies by type: user messages show first 30 chars, assistant entries show tool names with counts (`Bash ×2, Read`), summaries show `(compaction)`, and so on.
 
@@ -105,18 +107,18 @@ The visualization contains:
 2. **Token chart** — cumulative token consumption with the same block precision
 3. **Dimension tracks** — one row per dimension, one character per entry:
 
-| Track | Symbols |
-|-------|---------|
-| type | `◦` user, `●` assistant, _(space)_ progress/system/snapshot |
-| skill | `◆` initial load, `╰` progressive @ref, `◇` other |
-| tool | `▢` Bash, `▤` Read, `▣` WebFetch, `▥` Grep, `▦` Edit, `▧` Glob |
-| cache | `●` hit, `○` miss |
-| model | `◈` opus, `◇` sonnet, `◦` haiku |
-| files | `1`-`9` count, `+` for 10+ |
-| trunc | `†` truncated |
-| error | `×` failed |
-| alert | `‼` token delta > 5000 |
-| top | `1`-`9` rank in top consumers |
+| Track | Symbols                                                        |
+| ----- | -------------------------------------------------------------- |
+| type  | `◦` user, `●` assistant, _(space)_ progress/system/snapshot    |
+| skill | `◆` initial load, `╰` progressive @ref, `◇` other              |
+| tool  | `▢` Bash, `▤` Read, `▣` WebFetch, `▥` Grep, `▦` Edit, `▧` Glob |
+| cache | `●` hit, `○` miss                                              |
+| model | `◈` opus, `◇` sonnet, `◦` haiku                                |
+| files | `1`-`9` count, `+` for 10+                                     |
+| trunc | `†` truncated                                                  |
+| error | `×` failed                                                     |
+| alert | `‼` token delta > 5000                                         |
+| top   | `1`-`9` rank in top consumers                                  |
 
 4. **Top consumers** — the 9 assistant turns with largest token deltas, showing rank, turn index, delta, tools, skill, model, and cache status
 5. **Summary** — entry count, cache hit rate, errors, truncations, alerts
@@ -128,12 +130,12 @@ shan transcript analyze dc8ffe42
 
 ### Transcript target resolution
 
-| Form | Example | Resolves to |
-|------|---------|-------------|
-| Session ID prefix | `dc8ffe42` | Prefix match against UUIDs in `~/.claude/projects/<project>/` |
-| Full UUID | `9ba30f6f-...` | Exact match |
-| File path | `./file.jsonl`, `~/file.jsonl` | Direct file read |
-| _(omit)_ | | Interactive picker (TTY required) |
+| Form              | Example                        | Resolves to                                                   |
+| ----------------- | ------------------------------ | ------------------------------------------------------------- |
+| Session ID prefix | `dc8ffe42`                     | Prefix match against UUIDs in `~/.claude/projects/<project>/` |
+| Full UUID         | `9ba30f6f-...`                 | Exact match                                                   |
+| File path         | `./file.jsonl`, `~/file.jsonl` | Direct file read                                              |
+| _(omit)_          |                                | Interactive picker (TTY required)                             |
 
 Use `--all` to include sessions from all projects in the picker.
 
@@ -143,10 +145,10 @@ Use `--all` to include sessions from all projects in the picker.
 
 Copy task JSON files from `~/.claude/tasks/` into the project's `.claude/tasks/` directory.
 
-| Flag | Description |
-|------|-------------|
-| `--md` | Convert to Markdown instead of copying raw JSON |
-| `--all` | Include task lists from all projects |
+| Flag    | Description                                     |
+| ------- | ----------------------------------------------- |
+| `--md`  | Convert to Markdown instead of copying raw JSON |
+| `--all` | Include task lists from all projects            |
 
 ```sh
 shan task dump
@@ -162,8 +164,8 @@ shan task dump --all
 
 Open task list directory or individual task file in `$EDITOR` (defaults to Zed).
 
-| Flag | Description |
-|------|-------------|
+| Flag    | Description                                    |
+| ------- | ---------------------------------------------- |
 | `--all` | Include task lists from all projects in picker |
 
 ```sh
@@ -175,13 +177,13 @@ shan task open --all
 
 ### Task target resolution
 
-| Form | Example | Resolves to |
-|------|---------|-------------|
-| Named list | `test-schema` | Exact match on list name |
-| UUID prefix | `21b0` | Prefix match against session UUIDs |
-| List + task | `test-schema@3` | Task #3 in named list |
-| Subject search | `@Scaffold` | First task whose subject contains "Scaffold" |
-| _(omit)_ | | Interactive picker (TTY required) |
+| Form           | Example         | Resolves to                                  |
+| -------------- | --------------- | -------------------------------------------- |
+| Named list     | `test-schema`   | Exact match on list name                     |
+| UUID prefix    | `21b0`          | Prefix match against session UUIDs           |
+| List + task    | `test-schema@3` | Task #3 in named list                        |
+| Subject search | `@Scaffold`     | First task whose subject contains "Scaffold" |
+| _(omit)_       |                 | Interactive picker (TTY required)            |
 
 **Project scoping**: by default, named lists always appear; UUID lists appear only if the UUID matches a session from the current project. Use `--all` to bypass.
 
@@ -189,12 +191,25 @@ shan task open --all
 
 ### `skills` / `skills list`
 
-Show the effective outfit across all layers: core skills, pluggable-on, pluggable-off, and budget.
+Show the effective outfit across all layers: core skills, pluggable-on, pluggable-off, budget, and any configured mirror agents.
 
 ```sh
 shan skills
 shan skills list
 ```
+
+Agent resolution is configured in `~/.config/shan/config.json`:
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "agents": "auto"
+  }
+}
+```
+
+`"auto"` probes `claude` and `codex` on `PATH`, then caches the detected set in `~/.local/shan/cache.json` for 24 hours. Use an explicit array such as `["claude", "codex"]` to pin the enabled set.
 
 ### `skills on <targets> [--scope user] [--strict]`
 
@@ -226,11 +241,11 @@ Migrate skills between scopes or commitments. Atomic batch — all targets valid
 
 **Axes and directions**:
 
-| Command | Effect |
-|---------|--------|
-| `move scope up` | project library → user library |
-| `move scope down` | user library → project library |
-| `move commitment up` | pluggable → core (copy to outfit, stop managing) |
+| Command                | Effect                                             |
+| ---------------------- | -------------------------------------------------- |
+| `move scope up`        | project library → user library                     |
+| `move scope down`      | user library → project library                     |
+| `move commitment up`   | pluggable → core (copy to outfit, stop managing)   |
 | `move commitment down` | core → pluggable (move to library, create symlink) |
 
 Scope and commitment cannot change in one invocation.
@@ -292,9 +307,29 @@ shan skills migrate
 shan skills migrate --execute
 ```
 
+### `skills install <source> [--skill <name>]... [--all] [--scope user]`
+
+Import skills from a `skills.sh` source into shan's own library/outfit model.
+
+This command is intentionally non-interactive: pass one or more `--skill` flags or `--all`.
+
+Behavior:
+
+- installs into the canonical Claude outfit first
+- normalizes imported skill names into shan's layout
+- converts the imported skills into pluggable library entries
+- generates namespace routers when needed
+- reconciles any configured mirror agents afterward
+
+```sh
+shan skills install vercel-labs/agent-skills --skill typed-api-dx-review
+shan skills install vercel-labs/agent-skills --skill playwright --skill linear
+shan skills install vercel-labs/agent-skills --all --scope user
+```
+
 ### `skills install-user`
 
-Install shan's bundled user-level skills into `~/.claude/skills-library/` and equip them.
+Install shan's bundled user-level skills into `~/.claude/skills-library/`, equip them, and reconcile any configured mirror agents.
 
 ```sh
 shan skills install-user
@@ -302,13 +337,16 @@ shan skills install-user
 
 ## Managed locations
 
-| Path | Purpose |
-|------|---------|
-| `~/.claude/shan/config.json` | Shan configuration |
-| `~/.claude/shan/state.json` | Current installs, operation history |
-| `~/.claude/skills-library/` | User-level skill library |
-| `~/.claude/skills/` | User-level outfit (symlinks + core dirs) |
-| `.claude/skills-library/` | Project-level skill library |
-| `.claude/skills/` | Project-level outfit |
-| `.claude/transcripts/` | Dumped/printed/analyzed transcript output |
-| `.claude/tasks/` | Dumped task files |
+| Path                         | Purpose                                                          |
+| ---------------------------- | ---------------------------------------------------------------- |
+| `~/.config/shan/config.json` | Shan configuration                                               |
+| `~/.local/shan/cache.json`   | Cached `skills.agents: "auto"` agent detection                   |
+| `~/.claude/shan/state.json`  | Current installs, operation history                              |
+| `~/.claude/skills-library/`  | User-level skill library                                         |
+| `~/.claude/skills/`          | Canonical user-level outfit (symlinks + core dirs)               |
+| `~/.codex/skills/`           | User-level mirror outfit when resolved agents include `codex`    |
+| `.claude/skills-library/`    | Project-level skill library                                      |
+| `.claude/skills/`            | Canonical project-level outfit                                   |
+| `.codex/skills/`             | Project-level mirror outfit when resolved agents include `codex` |
+| `.claude/transcripts/`       | Dumped/printed/analyzed transcript output                        |
+| `.claude/tasks/`             | Dumped task files                                                |

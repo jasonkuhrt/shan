@@ -20,8 +20,19 @@ import { homedir } from 'node:os'
 import * as path from 'node:path'
 import * as Lib from '../../lib/skill-library.js'
 
-const OLD_INVENTORY_DIR = path.join(homedir(), '.claude/skill-inventory')
-const OLD_LOADOUTS_FILE = path.join(homedir(), '.claude/skill-loadouts.yml')
+export interface MigrateDirs {
+  oldInventoryDir: string
+  oldLoadoutsFile: string
+  libraryDir: string
+  outfitDir: string
+}
+
+const defaultDirs = (): MigrateDirs => ({
+  oldInventoryDir: path.join(homedir(), '.claude/skill-inventory'),
+  oldLoadoutsFile: path.join(homedir(), '.claude/skill-loadouts.yml'),
+  libraryDir: Lib.LIBRARY_DIR,
+  outfitDir: Lib.USER_OUTFIT_DIR,
+})
 
 interface MigrationPlan {
   moves: Array<{
@@ -43,72 +54,77 @@ interface MigrationPlan {
  * Split an inventory name on the first underscore to determine hierarchy.
  * Names without underscores stay at root.
  */
-const splitName = (name: string): { group: string | null; leaf: string } => {
+export const splitName = (name: string): { group: string | null; leaf: string } => {
   const idx = name.indexOf('_')
   if (idx === -1) return { group: null, leaf: name }
   return { group: name.slice(0, idx), leaf: name.slice(idx + 1) }
 }
 
-export const skillsMigrate = (options: { execute: boolean }) =>
+export const skillsMigrate = (options: { execute: boolean }, dirs?: MigrateDirs) =>
   Effect.gen(function* () {
+    const d = dirs ?? defaultDirs()
+
     // Check old inventory exists
     const oldExists = yield* Effect.tryPromise(async () => {
-      const stat = await lstat(OLD_INVENTORY_DIR)
+      const stat = await lstat(d.oldInventoryDir)
       return stat.isDirectory()
     }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
     if (!oldExists) {
-      yield* Console.error(`Old inventory not found: ${OLD_INVENTORY_DIR}`)
+      yield* Console.error(`Old inventory not found: ${d.oldInventoryDir}`)
       yield* Console.error('Nothing to migrate.')
       return yield* Effect.fail(new Error('Nothing to migrate'))
     }
 
     // Check new library doesn't already exist
-    const newExists = yield* Lib.libraryExists()
+    const newExists = yield* Effect.tryPromise(async () => {
+      const stat = await lstat(d.libraryDir)
+      return stat.isDirectory()
+    }).pipe(Effect.catchAll(() => Effect.succeed(false)))
     if (newExists) {
-      yield* Console.error(`Library already exists: ${Lib.LIBRARY_DIR}`)
+      yield* Console.error(`Library already exists: ${d.libraryDir}`)
       yield* Console.error('Migration already complete, or clean up first.')
       return yield* Effect.fail(new Error('Library already exists'))
     }
 
     // Build migration plan
-    const plan = yield* buildPlan()
+    const plan = yield* buildPlan(d)
 
     if (!options.execute) {
-      yield* printPlan(plan)
+      yield* printPlan(plan, d)
       yield* Console.log('')
       yield* Console.log('Run with --execute to perform the migration.')
       return
     }
 
-    yield* executePlan(plan)
+    yield* executePlan(plan, d)
   })
 
-const buildPlan = () =>
+const buildPlan = (d: MigrateDirs) =>
   Effect.gen(function* () {
-    const entries = yield* Effect.tryPromise(() => readdir(OLD_INVENTORY_DIR))
+    const entries = yield* Effect.tryPromise(() => readdir(d.oldInventoryDir))
     const plan: MigrationPlan = { moves: [], symlinkUpdates: [], deletes: [] }
 
     // Plan moves
     for (const name of entries.sort()) {
-      const oldPath = path.join(OLD_INVENTORY_DIR, name)
+      const oldPath = path.join(d.oldInventoryDir, name)
       const stat = yield* Effect.tryPromise(() => lstat(oldPath))
       if (!stat.isDirectory()) continue
 
       const { group, leaf } = splitName(name)
       const newRelPath = group ? `${group}/${leaf}` : leaf
-      const newPath = path.join(Lib.LIBRARY_DIR, newRelPath)
+      const newPath = path.join(d.libraryDir, newRelPath)
 
       plan.moves.push({ oldName: name, newRelPath, oldPath, newPath })
     }
 
     // Plan symlink updates
-    const skillsEntries = yield* Effect.tryPromise(() => readdir(Lib.USER_OUTFIT_DIR)).pipe(
+    const skillsEntries = yield* Effect.tryPromise(() => readdir(d.outfitDir)).pipe(
       Effect.catchAll(() => Effect.succeed([] as string[])),
     )
 
     for (const name of skillsEntries.sort()) {
-      const symlinkPath = path.join(Lib.USER_OUTFIT_DIR, name)
+      const symlinkPath = path.join(d.outfitDir, name)
       const stat = yield* Effect.tryPromise(() => lstat(symlinkPath))
       if (!stat.isSymbolicLink()) continue
 
@@ -131,20 +147,20 @@ const buildPlan = () =>
     }
 
     // Plan deletes
-    plan.deletes.push(OLD_INVENTORY_DIR)
+    plan.deletes.push(d.oldInventoryDir)
 
     const loadoutsExist = yield* Effect.tryPromise(async () => {
-      const stat = await lstat(OLD_LOADOUTS_FILE)
+      const stat = await lstat(d.oldLoadoutsFile)
       return stat.isFile()
     }).pipe(Effect.catchAll(() => Effect.succeed(false)))
     if (loadoutsExist) {
-      plan.deletes.push(OLD_LOADOUTS_FILE)
+      plan.deletes.push(d.oldLoadoutsFile)
     }
 
     return plan
   })
 
-const printPlan = (plan: MigrationPlan) =>
+const printPlan = (plan: MigrationPlan, d: MigrateDirs) =>
   Effect.gen(function* () {
     yield* Console.log('Migration Plan (dry run)')
     yield* Console.log('═'.repeat(50))
@@ -164,7 +180,7 @@ const printPlan = (plan: MigrationPlan) =>
       }
     }
 
-    yield* Console.log(`Create: ${Lib.LIBRARY_DIR}`)
+    yield* Console.log(`Create: ${d.libraryDir}`)
     yield* Console.log('')
 
     if (groups.size > 0) {
@@ -192,13 +208,13 @@ const printPlan = (plan: MigrationPlan) =>
     yield* Console.log(`Total: ${plan.moves.length} skills migrated`)
   })
 
-const executePlan = (plan: MigrationPlan) =>
+const executePlan = (plan: MigrationPlan, d: MigrateDirs) =>
   Effect.gen(function* () {
     yield* Console.log('Migrating skill inventory to hierarchical library...')
     yield* Console.log('')
 
     // 1. Create library directory
-    yield* Effect.tryPromise(() => mkdir(Lib.LIBRARY_DIR, { recursive: true }))
+    yield* Effect.tryPromise(() => mkdir(d.libraryDir, { recursive: true }))
 
     // 2. Create group directories and move skills
     const groupDirs = new Set<string>()
@@ -232,7 +248,7 @@ const executePlan = (plan: MigrationPlan) =>
     }
 
     yield* Console.log('')
-    yield* Console.log(`Migrated ${plan.moves.length} skills to ${Lib.LIBRARY_DIR}`)
+    yield* Console.log(`Migrated ${plan.moves.length} skills to ${d.libraryDir}`)
     yield* Console.log('')
     yield* Console.log("Run 'shan skills doctor' to verify the migration.")
   })
