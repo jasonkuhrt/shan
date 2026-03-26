@@ -5,12 +5,15 @@ import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
 import { skillsMigrate, splitName, type MigrateDirs } from './migrate.js'
+import { registerStateFileRestore } from './test-state.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
 const RAW_BASE = path.join(tmpdir(), `shan-migrate-test-${Math.random().toString(36).slice(2, 8)}`)
 await mkdir(RAW_BASE, { recursive: true })
 const TEMP_DIR = realpathSync(RAW_BASE)
+
+await registerStateFileRestore()
 
 afterAll(async () => {
   await rm(RAW_BASE, { recursive: true, force: true })

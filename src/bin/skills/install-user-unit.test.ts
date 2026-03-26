@@ -6,6 +6,7 @@ import * as path from 'node:path'
 import { tmpdir } from 'node:os'
 import { skillsInstallUser } from './install-user.js'
 import * as Lib from '../../lib/skill-library.js'
+import { registerStateFileRestore } from './test-state.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
@@ -16,6 +17,8 @@ const RAW_BASE = path.join(
 await mkdir(RAW_BASE, { recursive: true })
 const TEMP_DIR = realpathSync(RAW_BASE)
 const origCwd = process.cwd()
+
+await registerStateFileRestore()
 
 beforeEach(async () => {
   await rm(path.join(TEMP_DIR, '.claude'), { recursive: true, force: true })

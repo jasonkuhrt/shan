@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import type { DoctorContext, DoctorFinding } from '../../lib/doctor-aspects.js'
 import { autoFixDoctorFindings, collectDoctorFindings, skillsDoctor } from './doctor.js'
 import { skillsOn } from './on.js'
+import { registerStateFileRestore } from './test-state.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
@@ -14,6 +15,8 @@ const RAW_BASE = path.join(tmpdir(), `shan-doctor-test-${Math.random().toString(
 await mkdir(RAW_BASE, { recursive: true })
 const TEMP_DIR = realpathSync(RAW_BASE)
 const origCwd = process.cwd()
+
+await registerStateFileRestore()
 
 const SKILL_MD = (name: string) => `---
 name: ${name}

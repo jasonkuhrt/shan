@@ -16,7 +16,7 @@ if (!Number.isFinite(target) || target < 0 || target > 100) {
   process.exit(1)
 }
 
-const proc = Bun.spawn([process.execPath, 'test', '--coverage', 'src'], {
+const proc = Bun.spawn([process.execPath, 'scripts/run-tests.ts', '--coverage'], {
   cwd: process.cwd(),
   env: process.env,
   stdin: 'inherit',

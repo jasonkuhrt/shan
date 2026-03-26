@@ -5,6 +5,7 @@ import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
 import { skillsOn } from './on.js'
+import { registerStateFileRestore } from './test-state.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
@@ -12,6 +13,8 @@ const RAW_BASE = path.join(tmpdir(), `shan-on-test-${Math.random().toString(36).
 await mkdir(RAW_BASE, { recursive: true })
 const TEMP_DIR = realpathSync(RAW_BASE)
 const origCwd = process.cwd()
+
+await registerStateFileRestore()
 
 const SKILL_MD = `---
 name: test-skill

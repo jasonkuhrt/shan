@@ -6,6 +6,7 @@ import * as path from 'node:path'
 import { tmpdir } from 'node:os'
 import { skillsList } from './list.js'
 import { skillsOn } from './on.js'
+import { registerStateFileRestore } from './test-state.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
@@ -13,6 +14,8 @@ const RAW_BASE = path.join(tmpdir(), `shan-list-test-${Math.random().toString(36
 await mkdir(RAW_BASE, { recursive: true })
 const TEMP_DIR = realpathSync(RAW_BASE)
 const origCwd = process.cwd()
+
+await registerStateFileRestore()
 
 const SKILL_MD = (name: string) => `---
 name: ${name}

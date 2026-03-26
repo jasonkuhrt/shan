@@ -8,6 +8,7 @@ import { skillsHistory } from './history.js'
 import { skillsOn } from './on.js'
 import { skillsOff } from './off.js'
 import { skillsUndo } from './undo.js'
+import { registerStateFileRestore } from './test-state.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
@@ -15,6 +16,8 @@ const RAW_BASE = path.join(tmpdir(), `shan-history-test-${Math.random().toString
 await mkdir(RAW_BASE, { recursive: true })
 const TEMP_DIR = realpathSync(RAW_BASE)
 const origCwd = process.cwd()
+
+await registerStateFileRestore()
 
 const SKILL_MD = (name: string) => `---
 name: ${name}
