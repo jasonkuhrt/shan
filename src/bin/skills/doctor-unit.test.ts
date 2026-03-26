@@ -4,7 +4,8 @@ import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
-import { collectDoctorFindings, skillsDoctor } from './doctor.js'
+import type { DoctorContext, DoctorFinding } from '../../lib/doctor-aspects.js'
+import { autoFixDoctorFindings, collectDoctorFindings, skillsDoctor } from './doctor.js'
 import { skillsOn } from './on.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
@@ -114,5 +115,70 @@ describe('skillsDoctor', () => {
         finding.message.includes('.claude/skills/missing-skill'),
       ),
     ).toBe(false)
+  })
+
+  test('re-detects after each fix so stale overlapping fixes do not clobber prior repairs', async () => {
+    let targetState: 'user' | 'project' = 'user'
+
+    const dummyContext: DoctorContext = {
+      scope: 'project',
+      state: { version: 2, current: {}, history: {} },
+      library: [],
+      userLibraryDir: '/tmp/user-library',
+      projectLibraryDir: '/tmp/project-library',
+      userOutfit: [],
+      userOutfitDir: '/tmp/user-outfit',
+      projectOutfit: [],
+      projectOutfitDir: '/tmp/project-outfit',
+      gitignoreEntries: [],
+      config: {
+        version: 1,
+        skills: {
+          historyLimit: 50,
+          defaultScope: 'project',
+          agents: ['claude', 'codex'],
+        },
+      },
+      configuredAgents: ['claude', 'codex'],
+    }
+
+    const collect = (_scope: 'user' | 'project') =>
+      Effect.succeed(
+        targetState === 'user'
+          ? {
+              ctx: dummyContext,
+              findings: [
+                {
+                  aspect: 'stale-shadow',
+                  level: 'warning',
+                  message: '[project] shared-skill should repoint to the project library',
+                  fixable: true,
+                  fix: () =>
+                    Effect.sync(() => {
+                      targetState = 'project'
+                      return 'repointed: shared-skill → project library'
+                    }),
+                },
+                {
+                  aspect: 'cross-scope-install',
+                  level: 'error',
+                  message: '[project] shared-skill still points to the user library',
+                  fixable: true,
+                  fix: () =>
+                    Effect.sync(() => {
+                      targetState = 'user'
+                      return 'removed cross-scope symlink: shared-skill'
+                    }),
+                },
+              ] satisfies DoctorFinding[],
+            }
+          : { ctx: dummyContext, findings: [] satisfies DoctorFinding[] },
+      )
+
+    const outcome = await run(autoFixDoctorFindings('project', collect))
+
+    expect(outcome.fixedCount).toBe(1)
+    expect(outcome.fixDescriptions).toEqual(['repointed: shared-skill → project library'])
+    expect(targetState as 'user' | 'project').toBe('project')
   })
 })

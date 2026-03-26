@@ -6,7 +6,7 @@
 
 import { Console, Effect } from 'effect'
 import * as Lib from '../../lib/skill-library.js'
-import { ALL_ASPECTS, type DoctorFinding } from '../../lib/doctor-aspects.js'
+import { ALL_ASPECTS, type DoctorContext, type DoctorFinding } from '../../lib/doctor-aspects.js'
 
 export interface DoctorOptions {
   readonly noFix: boolean
@@ -19,10 +19,14 @@ export const createDoctorContext = (scope: Lib.Scope) =>
     if (!libExists) return null
 
     const state = yield* Lib.loadState()
+    const userLibraryDir = Lib.LIBRARY_DIR
+    const projectLibraryDir = Lib.projectLibraryDir()
+    const userOutfitDir = Lib.outfitDir('user')
+    const projectOutfitDir = Lib.outfitDir('project')
     const library =
       scope === 'user'
-        ? yield* Lib.listLibrary([Lib.LIBRARY_DIR])
-        : yield* Lib.listLibrary([Lib.LIBRARY_DIR, Lib.projectLibraryDir()])
+        ? yield* Lib.listLibrary([userLibraryDir])
+        : yield* Lib.listLibrary([userLibraryDir, projectLibraryDir])
     const userOutfit = scope === 'user' ? yield* Lib.listOutfit('user') : []
     const projectOutfit = scope === 'project' ? yield* Lib.listOutfit('project') : []
     const gitignoreEntries =
@@ -34,9 +38,12 @@ export const createDoctorContext = (scope: Lib.Scope) =>
       scope,
       state,
       library,
+      userLibraryDir,
+      projectLibraryDir,
       userOutfit,
+      userOutfitDir,
       projectOutfit,
-      projectOutfitDir: Lib.outfitDir('project'),
+      projectOutfitDir,
       gitignoreEntries,
       config,
       configuredAgents,
@@ -62,6 +69,66 @@ export const collectDoctorFindings = (scope: Lib.Scope) =>
     return { ctx, findings: allFindings }
   })
 
+export interface DoctorFixOutcome {
+  readonly fixedCount: number
+  readonly fixDescriptions: string[]
+  readonly remainingFindings: DoctorFinding[]
+}
+
+type DoctorFindingCollector = (
+  scope: Lib.Scope,
+) => Effect.Effect<{ ctx: DoctorContext; findings: DoctorFinding[] } | null>
+
+export const autoFixDoctorFindings = (
+  scope: Lib.Scope,
+  collect: DoctorFindingCollector = collectDoctorFindings,
+) =>
+  Effect.gen(function* () {
+    const maxFixPasses = 512
+    const failedFixes = new Set<string>()
+    const fixDescriptions: string[] = []
+    let fixedCount = 0
+    let remainingFindings: DoctorFinding[] = []
+
+    for (let pass = 0; pass < maxFixPasses; pass++) {
+      const result = yield* collect(scope)
+      if (!result) {
+        return { fixedCount, fixDescriptions, remainingFindings }
+      }
+
+      remainingFindings = result.findings
+
+      const nextFix = result.findings.find(
+        (finding): finding is DoctorFinding & { fix: NonNullable<DoctorFinding['fix']> } => {
+          if (!finding.fixable || !finding.fix) return false
+          const signature = `${finding.aspect}::${finding.message}`
+          return !failedFixes.has(signature)
+        },
+      )
+
+      if (!nextFix) {
+        return { fixedCount, fixDescriptions, remainingFindings }
+      }
+
+      const signature = `${nextFix.aspect}::${nextFix.message}`
+      const desc = yield* nextFix.fix().pipe(
+        Effect.catchAll((err) => {
+          failedFixes.add(signature)
+          return Console.error(`  fix failed: ${nextFix.message} — ${String(err)}`).pipe(
+            Effect.map(() => null as string | null),
+          )
+        }),
+      )
+
+      if (!desc) continue
+
+      fixedCount++
+      fixDescriptions.push(desc)
+    }
+
+    return { fixedCount, fixDescriptions, remainingFindings }
+  })
+
 export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
   Effect.gen(function* () {
     const scope = options.scope ?? 'project'
@@ -75,38 +142,22 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
       return
     }
 
-    const { ctx, findings: allFindings } = result
+    const { ctx, findings: initialFindings } = result
 
-    if (allFindings.length === 0) {
+    if (initialFindings.length === 0) {
       yield* Console.log('doctor: 0 issues — all clear')
       return
     }
 
     // ── Apply fixes or report ─────────────────────────────────────
-    const fixable = allFindings.filter((f) => f.fixable)
-    const unfixable = allFindings.filter((f) => !f.fixable)
-    let fixedCount = 0
-    const fixDescriptions: string[] = []
+    const initialFixable = initialFindings.filter((f) => f.fixable)
 
     if (!options.noFix) {
-      // Auto-fix mode
-      for (const f of fixable) {
-        if (f.fix) {
-          const desc = yield* f.fix().pipe(
-            Effect.catchAll((err) => {
-              return Console.error(`  fix failed: ${f.message} — ${String(err)}`).pipe(
-                Effect.map(() => null as string | null),
-              )
-            }),
-          )
-          if (desc) {
-            fixedCount++
-            fixDescriptions.push(desc)
-          }
-        }
-      }
+      const { fixedCount, fixDescriptions, remainingFindings } = yield* autoFixDoctorFindings(scope)
+      const unfixable = remainingFindings.filter((f) => !f.fixable)
+      const unresolvedFixable = remainingFindings.filter((f) => f.fixable && !f.fix)
 
-      yield* Console.log(`doctor: ${allFindings.length} issues found, ${fixedCount} fixed`)
+      yield* Console.log(`doctor: ${initialFindings.length} issues found, ${fixedCount} fixed`)
       yield* Console.log('')
 
       for (const desc of fixDescriptions) {
@@ -115,10 +166,8 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
       for (const f of unfixable) {
         yield* Console.log(`  ! ${f.aspect}: ${f.message}`)
       }
-      for (const f of fixable) {
-        if (!f.fix) {
-          yield* Console.log(`  ! ${f.aspect}: ${f.message}`)
-        }
+      for (const f of unresolvedFixable) {
+        yield* Console.log(`  ! ${f.aspect}: ${f.message}`)
       }
 
       // Record doctor history entry — reload state since fixes may have modified it
@@ -141,18 +190,18 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
       }
     } else {
       // Report-only mode
-      yield* Console.log(`doctor: ${allFindings.length} issues found (--no-fix: report only)`)
+      yield* Console.log(`doctor: ${initialFindings.length} issues found (--no-fix: report only)`)
       yield* Console.log('')
 
-      for (const f of allFindings) {
+      for (const f of initialFindings) {
         const fixLabel = f.fixable ? ' [fixable]' : ''
         yield* Console.log(`  ${f.aspect}: ${f.message}${fixLabel}`)
       }
 
-      if (fixable.length > 0) {
+      if (initialFixable.length > 0) {
         yield* Console.log('')
         yield* Console.log(
-          `  Run \`shan skills doctor\` to auto-fix ${fixable.length} of ${allFindings.length} issues`,
+          `  Run \`shan skills doctor\` to auto-fix ${initialFixable.length} of ${initialFindings.length} issues`,
         )
       }
     }

@@ -36,7 +36,10 @@ export interface DoctorContext {
   readonly scope: Lib.Scope
   readonly state: Lib.ShanState
   readonly library: Lib.SkillInfo[]
+  readonly userLibraryDir: string
+  readonly projectLibraryDir: string
   readonly userOutfit: Lib.OutfitEntry[]
+  readonly userOutfitDir: string
   readonly projectOutfit: Lib.OutfitEntry[]
   readonly projectOutfitDir: string
   readonly gitignoreEntries: string[]
@@ -87,6 +90,17 @@ const getResolvedDirectory = (target: string) =>
     const resolvedLstat = await lstat(resolvedTarget)
     return resolvedLstat.isDirectory() ? resolvedTarget : null
   }).pipe(Effect.catchAll(() => Effect.succeed(null)))
+
+const directoriesShareBackingStore = (left: string, right: string) =>
+  Effect.gen(function* () {
+    const leftResolved = yield* getResolvedDirectory(left)
+    if (!leftResolved) return false
+
+    const rightResolved = yield* getResolvedDirectory(right)
+    if (!rightResolved) return false
+
+    return leftResolved === rightResolved
+  })
 
 const scopeTargets = <T>(ctx: DoctorContext, userTarget: T, projectTarget: T): T[] =>
   ctx.scope === 'user' ? [userTarget] : [projectTarget]
@@ -700,15 +714,15 @@ const shadow: DoctorAspect = {
     Effect.gen(function* () {
       if (ctx.scope !== 'project') return []
       const findings: DoctorFinding[] = []
-      const projLibDir = Lib.projectLibraryDir()
-      const projLibExists = yield* Effect.tryPromise(async () => {
-        const stat = await lstat(projLibDir)
-        return stat.isDirectory()
-      }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+      const projLibDir = ctx.projectLibraryDir
+      const sharedLibrary = yield* directoriesShareBackingStore(ctx.userLibraryDir, projLibDir)
+      if (sharedLibrary) return findings
+
+      const projLibExists = yield* checkDirectory(projLibDir)
       if (!projLibExists) return findings
 
       for (const skill of ctx.library) {
-        if (skill.libraryDir === projLibDir) continue // only check user library skills
+        if (skill.libraryScope !== 'user') continue
         // Check if project library has same relative path
         const projPath = path.join(projLibDir, skill.libraryRelPath)
         const projExists = yield* checkSymlinkTarget(projPath)
@@ -735,13 +749,15 @@ const staleShadow: DoctorAspect = {
     Effect.gen(function* () {
       if (ctx.scope !== 'project') return []
       const findings: DoctorFinding[] = []
-      const projLibDir = Lib.projectLibraryDir()
+      const projLibDir = ctx.projectLibraryDir
+      const sharedLibrary = yield* directoriesShareBackingStore(ctx.userLibraryDir, projLibDir)
+      if (sharedLibrary) return findings
 
       for (const entry of ctx.projectOutfit) {
         if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
         // If this symlink points to user library, check if project library has it
-        if (!entry.symlinkTarget.startsWith(Lib.LIBRARY_DIR)) continue
-        const relPath = entry.symlinkTarget.slice(Lib.LIBRARY_DIR.length + 1)
+        if (!entry.symlinkTarget.startsWith(ctx.userLibraryDir)) continue
+        const relPath = entry.symlinkTarget.slice(ctx.userLibraryDir.length + 1)
         const projPath = path.join(projLibDir, relPath)
         const projExists = yield* checkSymlinkTarget(projPath)
         if (projExists) {
@@ -773,16 +789,20 @@ const crossScopeInstall: DoctorAspect = {
   description: 'Outfit symlink crosses scope boundary',
   level: 'error',
   detect: (ctx) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const findings: DoctorFinding[] = []
+      const sharedLibrary =
+        ctx.scope === 'project'
+          ? yield* directoriesShareBackingStore(ctx.userLibraryDir, ctx.projectLibraryDir)
+          : false
 
       // Check user outfit → should only point into user library
       if (ctx.scope === 'user') {
         for (const entry of ctx.userOutfit) {
           if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
-          if (entry.symlinkTarget.startsWith(Lib.LIBRARY_DIR)) continue // correct: user → user library
+          if (entry.symlinkTarget.startsWith(ctx.userLibraryDir)) continue // correct: user → user library
           if (entry.symlinkTarget.includes('.claude/skills-library/')) {
-            const linkPath = path.join(Lib.outfitDir('user'), entry.name)
+            const linkPath = path.join(ctx.userOutfitDir, entry.name)
             findings.push(
               finding(
                 'cross-scope-install',
@@ -807,7 +827,7 @@ const crossScopeInstall: DoctorAspect = {
         for (const entry of ctx.projectOutfit) {
           if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
           // If symlink points into user library, it's a cross-scope install
-          if (entry.symlinkTarget.startsWith(Lib.LIBRARY_DIR)) {
+          if (entry.symlinkTarget.startsWith(ctx.userLibraryDir) && !sharedLibrary) {
             const linkPath = path.join(ctx.projectOutfitDir, entry.name)
             findings.push(
               finding(

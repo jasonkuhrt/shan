@@ -38,7 +38,10 @@ const makeContext = (overrides: Partial<Aspects.DoctorContext> = {}): Aspects.Do
   scope: inferScope(overrides),
   state: { version: 2, current: {}, history: {} },
   library: [],
+  userLibraryDir: Lib.LIBRARY_DIR,
+  projectLibraryDir: Lib.projectLibraryDir(),
   userOutfit: [],
+  userOutfitDir: Lib.outfitDir('user'),
   projectOutfit: [],
   projectOutfitDir: path.join(process.cwd(), '.claude/skills'),
   gitignoreEntries: [],
@@ -1035,6 +1038,38 @@ describe('shadow aspect', () => {
     const findings = await run(aspect.detect(ctx))
     expect(findings).toEqual([])
   })
+
+  test('skips duplicate shadow findings when project library resolves to user library', async () => {
+    const dir = path.join(tmpBase, 'shadow-shared-library')
+    const userLibraryDir = path.join(dir, 'user-library')
+    const projectLibraryDir = path.join(dir, 'project-library')
+
+    try {
+      await mkdir(path.join(userLibraryDir, 'shared-skill'), { recursive: true })
+      await writeFile(path.join(userLibraryDir, 'shared-skill', 'SKILL.md'), 'shared')
+      await symlink(userLibraryDir, projectLibraryDir)
+
+      const ctx = makeContext({
+        scope: 'project',
+        userLibraryDir,
+        projectLibraryDir,
+        library: [
+          {
+            colonName: 'shared-skill',
+            libraryRelPath: 'shared-skill',
+            libraryDir: userLibraryDir,
+            libraryScope: 'user',
+            frontmatter: null,
+          },
+        ],
+      })
+
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // ── stale-shadow ──────────────────────────────────────────────────
@@ -1077,6 +1112,41 @@ describe('stale-shadow aspect', () => {
     })
     const findings = await run(aspect.detect(ctx))
     expect(findings).toEqual([])
+  })
+
+  test('skips findings when user and project libraries share the same backing store', async () => {
+    const dir = path.join(tmpBase, 'stale-shadow-shared-library')
+    const userLibraryDir = path.join(dir, 'user-library')
+    const projectLibraryDir = path.join(dir, 'project-library')
+    const projectOutfitDir = path.join(dir, 'project-outfit')
+
+    try {
+      await mkdir(path.join(userLibraryDir, 'shared-skill'), { recursive: true })
+      await writeFile(path.join(userLibraryDir, 'shared-skill', 'SKILL.md'), 'shared')
+      await mkdir(projectOutfitDir, { recursive: true })
+      await symlink(userLibraryDir, projectLibraryDir)
+
+      const ctx = makeContext({
+        scope: 'project',
+        userLibraryDir,
+        projectLibraryDir,
+        projectOutfitDir,
+        projectOutfit: [
+          Lib.OutfitEntry.make({
+            name: 'shared-skill',
+            dir: path.join(projectOutfitDir, 'shared-skill'),
+            commitment: 'pluggable',
+            scope: 'project',
+            symlinkTarget: path.join(userLibraryDir, 'shared-skill'),
+          }),
+        ],
+      })
+
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -1134,6 +1204,41 @@ describe('cross-scope-install aspect', () => {
     const findings = await run(aspect.detect(ctx))
     expect(findings).toHaveLength(1)
     expect(findings[0]!.aspect).toBe('cross-scope-install')
+  })
+
+  test('skips project findings when the project library resolves to the user library', async () => {
+    const dir = path.join(tmpBase, 'cross-scope-shared-library')
+    const userLibraryDir = path.join(dir, 'user-library')
+    const projectLibraryDir = path.join(dir, 'project-library')
+    const projectOutfitDir = path.join(dir, 'project-outfit')
+
+    try {
+      await mkdir(path.join(userLibraryDir, 'shared-skill'), { recursive: true })
+      await writeFile(path.join(userLibraryDir, 'shared-skill', 'SKILL.md'), 'shared')
+      await mkdir(projectOutfitDir, { recursive: true })
+      await symlink(userLibraryDir, projectLibraryDir)
+
+      const ctx = makeContext({
+        scope: 'project',
+        userLibraryDir,
+        projectLibraryDir,
+        projectOutfitDir,
+        projectOutfit: [
+          Lib.OutfitEntry.make({
+            name: 'shared-skill',
+            dir: path.join(projectOutfitDir, 'shared-skill'),
+            commitment: 'pluggable',
+            scope: 'project',
+            symlinkTarget: path.join(userLibraryDir, 'shared-skill'),
+          }),
+        ],
+      })
+
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   test('skips core entries', async () => {
