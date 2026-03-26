@@ -118,27 +118,57 @@ describe('skills install-user', () => {
 
       expect(result.exitCode).toBe(0)
 
-      const codexLinks = [
-        'shan',
-        'skills',
-        'skills_change',
-        'skills_list',
-        'skills_doctor',
-      ] as const
+      const mirrorStat = await lstat(path.join(home, '.codex', 'skills'))
+      expect(mirrorStat.isSymbolicLink()).toBe(true)
+      expect(await readlink(path.join(home, '.codex', 'skills'))).toBe(
+        path.join(home, '.claude', 'skills'),
+      )
+      expect(await lstat(path.join(home, '.codex', 'skills', 'shan'))).toBeDefined()
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 
-      const checks = await Promise.all(
-        codexLinks.map(async (entry) => {
-          const mirrorPath = path.join(home, '.codex', 'skills', entry)
-          const stat = await lstat(mirrorPath)
-          const target = await readlink(mirrorPath)
-          return { stat, target, entry }
-        }),
+  test('migrates a codex-owned real user skills directory into the canonical claude outfit', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'shan-install-user-migrate.'))
+
+    try {
+      const configDir = path.join(home, '.config', 'shan')
+      await mkdir(configDir, { recursive: true })
+      await writeFile(
+        path.join(configDir, 'config.json'),
+        JSON.stringify(
+          {
+            version: 1,
+            skills: {
+              historyLimit: 50,
+              defaultScope: 'project',
+              agents: ['claude', 'codex'],
+            },
+          },
+          null,
+          2,
+        ) + '\n',
       )
 
-      for (const check of checks) {
-        expect(check.stat.isSymbolicLink()).toBe(true)
-        expect(check.target).toBe(path.join(home, '.claude', 'skills', check.entry))
-      }
+      await mkdir(path.join(home, '.codex', 'skills', 'codex-owned'), { recursive: true })
+      await writeFile(
+        path.join(home, '.codex', 'skills', 'codex-owned', 'SKILL.md'),
+        '---\nname: codex-owned\ndescription: Created from Codex\n---\n# codex-owned\n',
+      )
+
+      const result = await runShan(home, ['skills', 'install-user'])
+
+      expect(result.exitCode).toBe(0)
+      expect(
+        await Bun.file(path.join(home, '.claude', 'skills', 'codex-owned', 'SKILL.md')).text(),
+      ).toContain('Created from Codex')
+
+      const mirrorStat = await lstat(path.join(home, '.codex', 'skills'))
+      expect(mirrorStat.isSymbolicLink()).toBe(true)
+      expect(await readlink(path.join(home, '.codex', 'skills'))).toBe(
+        path.join(home, '.claude', 'skills'),
+      )
     } finally {
       await rm(home, { recursive: true, force: true })
     }
@@ -168,8 +198,11 @@ describe('skills install-user', () => {
       expect(isRecord(agents)).toBe(true)
       expect(Array.isArray(installed) ? installed : []).toContain('codex')
 
-      const firstMirrorStat = await lstat(path.join(home, '.codex', 'skills', 'shan'))
+      const firstMirrorStat = await lstat(path.join(home, '.codex', 'skills'))
       expect(firstMirrorStat.isSymbolicLink()).toBe(true)
+      expect(await readlink(path.join(home, '.codex', 'skills'))).toBe(
+        path.join(home, '.claude', 'skills'),
+      )
 
       await rm(codexBin, { force: true })
 
@@ -179,8 +212,11 @@ describe('skills install-user', () => {
 
       expect(second.exitCode).toBe(0)
 
-      const cachedMirrorStat = await lstat(path.join(home, '.codex', 'skills', 'shan'))
+      const cachedMirrorStat = await lstat(path.join(home, '.codex', 'skills'))
       expect(cachedMirrorStat.isSymbolicLink()).toBe(true)
+      expect(await readlink(path.join(home, '.codex', 'skills'))).toBe(
+        path.join(home, '.claude', 'skills'),
+      )
     } finally {
       await rm(home, { recursive: true, force: true })
     }

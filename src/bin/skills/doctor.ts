@@ -31,6 +31,7 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
     const projectOutfit = yield* Lib.listOutfit('project')
     const gitignoreEntries = yield* Lib.readGitignoreEntries(process.cwd())
     const config = yield* Lib.loadConfig()
+    const configuredAgents = yield* Lib.resolveConfiguredAgents(config)
 
     const ctx: DoctorContext = {
       state,
@@ -39,6 +40,8 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
       projectOutfit,
       projectOutfitDir: Lib.outfitDir('project'),
       gitignoreEntries,
+      config,
+      configuredAgents,
     }
 
     // ── Resolve disabled aspects ──────────────────────────────────

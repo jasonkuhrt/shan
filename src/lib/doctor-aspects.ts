@@ -9,6 +9,7 @@ import {
   lstat,
   readFile,
   readlink,
+  realpath,
   rename,
   rm,
   symlink,
@@ -38,6 +39,8 @@ export interface DoctorContext {
   readonly projectOutfit: Lib.OutfitEntry[]
   readonly projectOutfitDir: string
   readonly gitignoreEntries: string[]
+  readonly config: Lib.ShanConfig
+  readonly configuredAgents: readonly Lib.Agent[]
 }
 
 export interface DoctorAspect {
@@ -65,6 +68,78 @@ const checkSymlinkTarget = (target: string) =>
     const stat = await lstat(target)
     return stat.isDirectory()
   }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+
+const checkDirectory = (target: string) =>
+  Effect.tryPromise(async () => {
+    const targetLstat = await lstat(target)
+    if (targetLstat.isDirectory()) return true
+    if (!targetLstat.isSymbolicLink()) return false
+
+    const resolvedTarget = await realpath(target)
+    const resolvedLstat = await lstat(resolvedTarget)
+    return resolvedLstat.isDirectory()
+  }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+
+const getResolvedDirectory = (target: string) =>
+  Effect.tryPromise(async () => {
+    const resolvedTarget = await realpath(target)
+    const resolvedLstat = await lstat(resolvedTarget)
+    return resolvedLstat.isDirectory() ? resolvedTarget : null
+  }).pipe(Effect.catchAll(() => Effect.succeed(null)))
+
+const agentMirror: DoctorAspect = {
+  name: 'agent-mirror',
+  description: 'Configured mirror agent outfit diverges from canonical outfit',
+  level: 'warning',
+  detect: (ctx) =>
+    Effect.gen(function* () {
+      const findings: DoctorFinding[] = []
+      const mirrorAgents = Lib.getMirrorAgents(ctx.configuredAgents)
+      if (mirrorAgents.length === 0) return findings
+
+      for (const scope of ['user', 'project'] as const) {
+        const canonicalDir = Lib.outfitDir(scope)
+        const canonicalExists = yield* checkDirectory(canonicalDir)
+        const canonicalResolved = canonicalExists ? yield* getResolvedDirectory(canonicalDir) : null
+
+        for (const mirrorAgent of mirrorAgents) {
+          const mirrorDir = Lib.agentOutfitDir(scope, mirrorAgent)
+          const mirrorExists = yield* checkDirectory(mirrorDir)
+          const mirrorStat = yield* Effect.tryPromise(() => lstat(mirrorDir)).pipe(
+            Effect.catchAll(() => Effect.succeed(null)),
+          )
+
+          if (!canonicalExists && !mirrorExists && !mirrorStat) continue
+
+          if (canonicalResolved && mirrorExists) {
+            const mirrorResolved = yield* getResolvedDirectory(mirrorDir)
+            if (mirrorResolved === canonicalResolved) continue
+          }
+
+          const problem = !mirrorStat
+            ? 'missing'
+            : mirrorStat.isSymbolicLink()
+              ? 'points elsewhere'
+              : 'is not a symlink'
+
+          findings.push(
+            finding(
+              'agent-mirror',
+              'warning',
+              `[${scope}] ${mirrorAgent} skills ${problem} (expected ${mirrorDir} → ${canonicalDir})`,
+              true,
+              () =>
+                Lib.syncAgentMirrors(scope, ctx.config).pipe(
+                  Effect.as(`reconciled ${mirrorAgent} skills mirror (${scope})`),
+                ),
+            ),
+          )
+        }
+      }
+
+      return findings
+    }),
+}
 
 // ── Aspects ──────────────────────────────────────────────────────────
 
@@ -296,8 +371,17 @@ const staleGitignore: DoctorAspect = {
       )
       const projectRouters = yield* Lib.detectGeneratedRouters('project')
       const projectRouterNames = new Set(projectRouters)
+      const mirrorEntries = new Set(
+        Lib.getMirrorAgents(ctx.configuredAgents).map((agent) =>
+          path
+            .relative(process.cwd(), Lib.agentOutfitDir('project', agent))
+            .split(path.sep)
+            .join('/'),
+        ),
+      )
 
       for (const entry of ctx.gitignoreEntries) {
+        if (mirrorEntries.has(entry)) continue
         const name = entry.replace('.claude/skills/', '')
         if (!projectPluggableNames.has(name) && !projectRouterNames.has(name)) {
           findings.push(
@@ -841,6 +925,7 @@ const staleRouter: DoctorAspect = {
 // ── Registry ─────────────────────────────────────────────────────────
 
 export const ALL_ASPECTS: readonly DoctorAspect[] = [
+  agentMirror,
   brokenSymlink,
   stateDrift,
   newLeaf,

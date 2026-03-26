@@ -48,7 +48,7 @@ This copies skill definitions into `~/.claude/skills-library/` and creates outfi
 
 ## Configure agents
 
-Shan keeps Claude as the canonical outfit and can mirror that active set to Codex as an exact symlink-only view.
+Shan keeps Claude as the canonical outfit and can mirror that active set to Codex as whole-dir symlinks.
 
 The default config is:
 
@@ -76,12 +76,12 @@ To pin the enabled set explicitly:
 }
 ```
 
-After the next shan skill mutation, if the resolved agent set includes `codex`, these mirror directories will be reconciled to match the canonical Claude outfit:
+After the next shan skill mutation, if the resolved agent set includes `codex`, these mirror directories will be reconciled to symlink to the canonical Claude outfit:
 
 - `~/.codex/skills/`
 - `.codex/skills/`
 
-Shan owns the contents of mirrored directories completely. Do not keep Codex-only skills there.
+Shan owns the Codex mirror directories completely. If it finds a real Codex skills directory instead of the expected symlink, it migrates non-conflicting entries into the canonical Claude outfit and then replaces the Codex directory with the symlink. Same-name conflicts stop and surface an error.
 
 ## Import from skills.sh
 
@@ -118,7 +118,7 @@ The output shows core skills (always active), pluggable-on skills (symlinked fro
 
 - `transcript dump` parsed the JSONL session file using Effect Schema, extracted entry types and summaries, and wrote formatted Markdown
 - `skills list` read `~/.claude/shan/state.json` and the outfit/library directories to compute the effective skill set
-- Resolved non-Claude agents are projected from the canonical Claude outfit rather than managed separately
+- Resolved non-Claude agents are symlinked to the canonical Claude outfit rather than managed separately
 - Both commands resolved file paths from Claude Code's standard locations (`~/.claude/projects/`, `~/.claude/skills/`)
 
 ## Running from the repo

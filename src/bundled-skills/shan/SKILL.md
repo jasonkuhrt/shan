@@ -205,7 +205,7 @@ Undo/redo fully supported for all move operations via composite history entries.
 
 Run aspect-based health checks. Default: detect + auto-fix. Use `--no-fix` for report-only mode.
 
-**13 aspects:** broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
+**14 aspects:** agent-mirror, broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
 
 ```bash
 shan skills doctor                             # detect + auto-fix

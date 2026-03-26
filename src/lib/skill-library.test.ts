@@ -1,11 +1,14 @@
 import { describe, expect, test, mock } from 'bun:test'
-import { Effect } from 'effect'
+import { Cause, Effect, Exit } from 'effect'
 import { chmod, lstat, mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import * as path from 'node:path'
 import * as Lib from './skill-library.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
+const runExit = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromiseExit(effect)
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -263,7 +266,7 @@ describe('resolveHistoryOutfitDir', () => {
 })
 
 describe('syncAgentMirrors', () => {
-  test('reconciles project mirror directories and gitignore entries', async () => {
+  test('reconciles project mirror directories as whole-dir symlinks and updates gitignore', async () => {
     const projectRoot = path.join(tmpBase, 'mirror-sync-project')
     const origCwd = process.cwd()
 
@@ -293,22 +296,196 @@ describe('syncAgentMirrors', () => {
         }),
       )
 
-      const mirrorPath = path.join(projectRoot, '.codex', 'skills', 'alpha')
+      const mirrorPath = path.join(projectRoot, '.codex', 'skills')
       const mirrorStat = await lstat(mirrorPath)
       expect(mirrorStat.isSymbolicLink()).toBe(true)
-      expect(await readlink(mirrorPath)).toBe(path.join(projectRoot, '.claude', 'skills', 'alpha'))
-
-      let staleExists = true
-      try {
-        await lstat(path.join(projectRoot, '.codex', 'skills', 'stale'))
-      } catch {
-        staleExists = false
-      }
-      expect(staleExists).toBe(false)
+      expect(await readlink(mirrorPath)).toBe(path.join(projectRoot, '.claude', 'skills'))
+      expect(
+        await readFile(path.join(projectRoot, '.codex', 'skills', 'alpha', 'SKILL.md'), 'utf-8'),
+      ).toContain('Alpha')
 
       const gitignore = await readFile(path.join(projectRoot, '.gitignore'), 'utf-8')
       expect(gitignore).toContain('.claude/skills/alpha')
       expect(gitignore).toContain('.codex/skills')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('migrates a mirror-owned real directory into the canonical project outfit', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-sync-project-migrate')
+    const origCwd = process.cwd()
+
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(path.join(projectRoot, '.codex', 'skills', 'alpha'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.codex', 'skills', 'alpha', 'SKILL.md'),
+        '---\nname: alpha\ndescription: Alpha\n---\n# alpha\n',
+      )
+      process.chdir(projectRoot)
+
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+
+      expect(
+        await readFile(path.join(projectRoot, '.claude', 'skills', 'alpha', 'SKILL.md'), 'utf-8'),
+      ).toContain('Alpha')
+
+      const mirrorStat = await lstat(path.join(projectRoot, '.codex', 'skills'))
+      expect(mirrorStat.isSymbolicLink()).toBe(true)
+      expect(await readlink(path.join(projectRoot, '.codex', 'skills'))).toBe(
+        path.join(projectRoot, '.claude', 'skills'),
+      )
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('merges non-conflicting canonical and mirror-owned real directories before replacing the mirror with a symlink', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-sync-project-merge')
+    const origCwd = process.cwd()
+
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(path.join(projectRoot, '.claude', 'skills', 'alpha'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.claude', 'skills', 'alpha', 'SKILL.md'),
+        '---\nname: alpha\ndescription: Alpha\n---\n# alpha\n',
+      )
+      await mkdir(path.join(projectRoot, '.codex', 'skills', 'beta'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.codex', 'skills', 'beta', 'SKILL.md'),
+        '---\nname: beta\ndescription: Beta\n---\n# beta\n',
+      )
+      process.chdir(projectRoot)
+
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+
+      expect(
+        await readFile(path.join(projectRoot, '.claude', 'skills', 'alpha', 'SKILL.md'), 'utf-8'),
+      ).toContain('Alpha')
+      expect(
+        await readFile(path.join(projectRoot, '.claude', 'skills', 'beta', 'SKILL.md'), 'utf-8'),
+      ).toContain('Beta')
+
+      const mirrorStat = await lstat(path.join(projectRoot, '.codex', 'skills'))
+      expect(mirrorStat.isSymbolicLink()).toBe(true)
+      expect(await readlink(path.join(projectRoot, '.codex', 'skills'))).toBe(
+        path.join(projectRoot, '.claude', 'skills'),
+      )
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('fails when canonical and mirror real directories define the same skill differently', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-sync-project-conflict')
+    const origCwd = process.cwd()
+
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(path.join(projectRoot, '.claude', 'skills', 'alpha'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.claude', 'skills', 'alpha', 'SKILL.md'),
+        '---\nname: alpha\ndescription: Claude Alpha\n---\n# alpha\n',
+      )
+      await mkdir(path.join(projectRoot, '.codex', 'skills', 'alpha'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.codex', 'skills', 'alpha', 'SKILL.md'),
+        '---\nname: alpha\ndescription: Codex Alpha\n---\n# alpha\n',
+      )
+      process.chdir(projectRoot)
+
+      const exit = await runExit(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const failure = Cause.failureOption(exit.cause)
+        expect(failure._tag).toBe('Some')
+        if (failure._tag === 'Some') {
+          const failureValue: unknown = failure.value
+          const cause =
+            isRecord(failureValue) && 'cause' in failureValue ? failureValue['cause'] : undefined
+          expect(isRecord(cause)).toBe(true)
+          if (isRecord(cause)) {
+            expect(cause['_tag']).toBe('AgentOutfitConflictError')
+          }
+        }
+      }
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('accepts mirror symlinks that resolve to the canonical outfit through a different path', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-sync-project-equivalent-link')
+    const origCwd = process.cwd()
+
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(path.join(projectRoot, '.claude', 'skills', 'alpha'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.claude', 'skills', 'alpha', 'SKILL.md'),
+        '---\nname: alpha\ndescription: Alpha\n---\n# alpha\n',
+      )
+      await mkdir(path.join(projectRoot, '.codex'), { recursive: true })
+      await symlink(
+        path.join(projectRoot, '.claude', '.', 'skills'),
+        path.join(projectRoot, '.codex', 'skills'),
+      )
+      process.chdir(projectRoot)
+
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+
+      expect(
+        await readFile(path.join(projectRoot, '.claude', 'skills', 'alpha', 'SKILL.md'), 'utf-8'),
+      ).toContain('Alpha')
+
+      const mirrorStat = await lstat(path.join(projectRoot, '.codex', 'skills'))
+      expect(mirrorStat.isSymbolicLink()).toBe(true)
+      expect(
+        await readFile(path.join(projectRoot, '.codex', 'skills', 'alpha', 'SKILL.md'), 'utf-8'),
+      ).toContain('Alpha')
     } finally {
       process.chdir(origCwd)
       await rm(projectRoot, { recursive: true, force: true })

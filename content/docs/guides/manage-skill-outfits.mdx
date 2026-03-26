@@ -36,7 +36,7 @@ Shan keeps Claude Code as the canonical outfit:
 - `~/.claude/skills/`
 - `.claude/skills/`
 
-Other agents can be configured as exact symlink-only mirrors of that active set. Today the built-in agent names are `claude` and `codex`, with Claude remaining canonical.
+Other agents can be configured as whole-dir symlink mirrors of that active set. Today the built-in agent names are `claude` and `codex`, with Claude remaining canonical.
 
 Default config:
 
@@ -52,6 +52,8 @@ Default config:
 Put that in `~/.config/shan/config.json`.
 
 `"auto"` probes `claude` and `codex` on `PATH`, then caches the detected set in `~/.local/shan/cache.json` for 24 hours.
+
+If you want to force a fresh auto-detection immediately, delete `~/.local/shan/cache.json`.
 
 To pin the enabled set explicitly:
 
@@ -69,7 +71,14 @@ When the resolved agent set includes `codex`, every shan skill mutation reconcil
 - `~/.codex/skills/`
 - `.codex/skills/`
 
-Mirrored directories are fully owned by shan. Do not keep Codex-only skills there; shan will replace the contents to match the canonical Claude outfit exactly.
+Mirrored directories are fully owned by shan:
+
+- `~/.codex/skills/` becomes a symlink to `~/.claude/skills/`
+- `.codex/skills/` becomes a symlink to `.claude/skills/`
+
+If shan finds a real Codex skills directory instead of the expected symlink, it migrates non-conflicting entries into the canonical Claude outfit and then replaces the Codex directory with the symlink. If both agents define the same skill name differently, shan stops and reports a conflict instead of guessing.
+
+Equivalent symlink paths are accepted too. If a Codex mirror already resolves to the canonical Claude outfit through a different path string, shan treats that layout as healthy instead of rewriting it unnecessarily.
 
 ## Turn skills on
 
@@ -136,7 +145,7 @@ Behavior:
 - normalizes the imported skill names into shan's naming/layout
 - converts the imported skills into pluggable library entries
 - generates namespace routers when needed
-- reconciles any configured agent mirrors afterward
+- reconciles any configured agent mirrors afterward by re-symlinking whole agent skills directories
 
 ## Undo and redo
 
@@ -168,6 +177,6 @@ shan skills doctor                             # detect + auto-fix
 shan skills doctor --no-fix                    # report only
 ```
 
-Doctor runs 13 diagnostic aspects: broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
+Doctor runs 14 diagnostic aspects: agent-mirror, broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
 
 Default mode detects and fixes. Use `--no-fix` to see findings without changes.

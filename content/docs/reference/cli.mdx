@@ -21,6 +21,8 @@ source_files:
   - src/bin/skills/migrate.ts
   - src/bin/skills/install.ts
   - src/bin/skills/install-user.ts
+  - src/lib/doctor-aspects.ts
+  - src/lib/skill-library.ts
 ---
 
 ```
@@ -36,6 +38,32 @@ shan <namespace> <command> [target] [options]
 | `--global`       | Alias for `--scope user`                                   |
 | `--skill <name>` | Select specific skills for `skills install` (repeatable)   |
 | `--strict`       | Treat no-ops (already on, already off) as errors           |
+
+## Skills config
+
+Shan reads skills configuration from `~/.config/shan/config.json`.
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "defaultScope": "project",
+    "historyLimit": 50,
+    "agents": "auto"
+  }
+}
+```
+
+| Key                      | Values                          | Description                                            |
+| ------------------------ | ------------------------------- | ------------------------------------------------------ |
+| `skills.defaultScope`    | `project`, `user`               | Default scope for skills commands that support scoping |
+| `skills.historyLimit`    | integer                         | Max retained history entries per scope                 |
+| `skills.agents`          | `"auto"`, `["claude", "codex"]` | Enabled agent views for outfit mirroring               |
+| `skills.doctor.disabled` | aspect names                    | Skip selected doctor aspects                           |
+
+`skills.agents: "auto"` probes `claude` and `codex` on `PATH`, then caches the detected set in `~/.local/shan/cache.json` for 24 hours. Delete that cache file to force an immediate refresh.
+
+Claude is the canonical agent for now. Any non-Claude enabled agents are managed as whole-directory mirrors of the matching Claude outfit directories.
 
 ## Transcript namespace
 
@@ -209,7 +237,15 @@ Agent resolution is configured in `~/.config/shan/config.json`:
 }
 ```
 
-`"auto"` probes `claude` and `codex` on `PATH`, then caches the detected set in `~/.local/shan/cache.json` for 24 hours. Use an explicit array such as `["claude", "codex"]` to pin the enabled set.
+`skills list` reports these sections when present:
+
+- `Core (user)` / `Core (project)` — real directories shan does not manage
+- `On (user)` / `On (project)` — pluggable skills currently equipped from the library
+- `Off` — available pluggable skills not currently equipped
+- `Budget` — approximate character usage against the model-visible skills budget
+- `Agent mirrors` — configured mirror directories such as Codex
+
+Use an explicit array such as `["claude", "codex"]` to pin the enabled set instead of relying on `"auto"`.
 
 ### `skills on <targets> [--scope user] [--strict]`
 
@@ -289,9 +325,19 @@ shan skills redo --scope user
 
 ### `skills doctor [--no-fix]`
 
-Run 13 diagnostic aspects against the outfit. Default: detect and auto-fix. Use `--no-fix` for report-only mode.
+Run 14 diagnostic aspects against the outfit. Default: detect and auto-fix. Use `--no-fix` for report-only mode.
 
-**Aspects**: broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
+**Aspects**: agent-mirror, broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
+
+The `agent-mirror` aspect is intentionally defensive around janky layouts. When Codex is enabled, doctor will:
+
+- create a missing `.codex/skills` or `~/.codex/skills` mirror
+- accept equivalent symlinks that resolve to the canonical Claude outfit through a different path
+- migrate a real Codex-owned skills directory into Claude when the Claude outfit is missing
+- merge non-conflicting real Codex and Claude directories before restoring the symlink
+- stop on same-name content conflicts instead of guessing
+
+Auto-fix mode applies every fixable finding except explicit conflict/manual-review cases.
 
 ```sh
 shan skills doctor
@@ -315,11 +361,12 @@ This command is intentionally non-interactive: pass one or more `--skill` flags 
 
 Behavior:
 
+- shells out to `npx skills add <source> --agent claude-code --copy`
 - installs into the canonical Claude outfit first
 - normalizes imported skill names into shan's layout
 - converts the imported skills into pluggable library entries
 - generates namespace routers when needed
-- reconciles any configured mirror agents afterward
+- reconciles any configured mirror agents afterward by re-symlinking whole agent skills directories
 
 ```sh
 shan skills install vercel-labs/agent-skills --skill typed-api-dx-review
@@ -337,16 +384,16 @@ shan skills install-user
 
 ## Managed locations
 
-| Path                         | Purpose                                                          |
-| ---------------------------- | ---------------------------------------------------------------- |
-| `~/.config/shan/config.json` | Shan configuration                                               |
-| `~/.local/shan/cache.json`   | Cached `skills.agents: "auto"` agent detection                   |
-| `~/.claude/shan/state.json`  | Current installs, operation history                              |
-| `~/.claude/skills-library/`  | User-level skill library                                         |
-| `~/.claude/skills/`          | Canonical user-level outfit (symlinks + core dirs)               |
-| `~/.codex/skills/`           | User-level mirror outfit when resolved agents include `codex`    |
-| `.claude/skills-library/`    | Project-level skill library                                      |
-| `.claude/skills/`            | Canonical project-level outfit                                   |
-| `.codex/skills/`             | Project-level mirror outfit when resolved agents include `codex` |
-| `.claude/transcripts/`       | Dumped/printed/analyzed transcript output                        |
-| `.claude/tasks/`             | Dumped task files                                                |
+| Path                         | Purpose                                                                      |
+| ---------------------------- | ---------------------------------------------------------------------------- |
+| `~/.config/shan/config.json` | Shan configuration                                                           |
+| `~/.local/shan/cache.json`   | Cached `skills.agents: "auto"` agent detection                               |
+| `~/.claude/shan/state.json`  | Current installs, operation history                                          |
+| `~/.claude/skills-library/`  | User-level skill library                                                     |
+| `~/.claude/skills/`          | Canonical user-level outfit (symlinks + core dirs)                           |
+| `~/.codex/skills/`           | User-level symlink to the canonical Claude outfit when `codex` is enabled    |
+| `.claude/skills-library/`    | Project-level skill library                                                  |
+| `.claude/skills/`            | Canonical project-level outfit                                               |
+| `.codex/skills/`             | Project-level symlink to the canonical Claude outfit when `codex` is enabled |
+| `.claude/transcripts/`       | Dumped/printed/analyzed transcript output                                    |
+| `.claude/tasks/`             | Dumped task files                                                            |

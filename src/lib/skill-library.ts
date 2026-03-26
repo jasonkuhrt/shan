@@ -27,6 +27,8 @@ import {
   readdir,
   readFile,
   readlink,
+  realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -48,6 +50,7 @@ export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
 export const CACHE_FILE = path.join(CACHE_DIR, 'cache.json')
 const USER_HOME = homedir()
 const LEGACY_CONFIG_FILE = path.join(SHAN_DIR, 'config.json')
+// TODO: Make the canonical agent configurable once shan supports full multi-agent ownership.
 export const CANONICAL_AGENT = 'claude' as const
 const AGENT_ORDER = [CANONICAL_AGENT, 'codex'] as const
 const AGENT_PROBE_COMMANDS = {
@@ -856,51 +859,214 @@ export const ensureOutfitDir = (dir: string) =>
 
 const mirrorGitignoreEntry = (agent: Agent): string => path.join(AGENT_ROOT_DIRS[agent], 'skills')
 
-const syncMirrorOutfit = (
+export class AgentOutfitConflictError extends Data.TaggedError('AgentOutfitConflictError')<{
+  readonly scope: Scope
+  readonly canonicalAgent: Agent
+  readonly mirrorAgent: Agent
+  readonly skillName: string
+  readonly canonicalPath: string
+  readonly mirrorPath: string
+}> {}
+
+const lstatOrNull = async (targetPath: string) => {
+  try {
+    return await lstat(targetPath)
+  } catch {
+    return null
+  }
+}
+
+const statOrNull = async (targetPath: string) => {
+  try {
+    return await stat(targetPath)
+  } catch {
+    return null
+  }
+}
+
+const realpathOrNull = async (targetPath: string) => {
+  try {
+    return await realpath(targetPath)
+  } catch {
+    return null
+  }
+}
+
+const isDirectoryLike = async (targetPath: string): Promise<boolean> => {
+  const targetStat = await statOrNull(targetPath)
+  return Boolean(targetStat?.isDirectory())
+}
+
+const resolvesToSameDirectory = async (leftPath: string, rightPath: string): Promise<boolean> => {
+  const [leftRealpath, rightRealpath] = await Promise.all([
+    realpathOrNull(leftPath),
+    realpathOrNull(rightPath),
+  ])
+  return Boolean(leftRealpath && rightRealpath && leftRealpath === rightRealpath)
+}
+
+const snapshotSkillEntry = async (entryPath: string, seen = new Set<string>()): Promise<string> => {
+  const entryLstat = await lstatOrNull(entryPath)
+  if (!entryLstat) return 'missing'
+
+  if (entryLstat.isSymbolicLink()) {
+    const targetStat = await statOrNull(entryPath)
+    if (!targetStat) {
+      const target = await readlink(entryPath).catch(() => '(broken)')
+      return `broken:${target}`
+    }
+  }
+
+  const resolvedPath = await realpath(entryPath).catch(() => entryPath)
+  if (seen.has(resolvedPath)) return `cycle:${resolvedPath}`
+
+  const entryStat = await stat(entryPath)
+  if (entryStat.isDirectory()) {
+    seen.add(resolvedPath)
+    const childNames = (await readdir(entryPath)).sort()
+    const children = await Promise.all(
+      childNames.map(async (childName) => {
+        const childSnapshot = await snapshotSkillEntry(path.join(entryPath, childName), seen)
+        return `${childName}:${childSnapshot}`
+      }),
+    )
+    seen.delete(resolvedPath)
+    return `dir(${children.join('|')})`
+  }
+
+  if (entryStat.isFile()) {
+    return `file:${await readFile(entryPath, 'utf-8')}`
+  }
+
+  return `other:${entryStat.mode}`
+}
+
+const mergeMirrorEntriesIntoCanonical = async (
   scope: Scope,
   mirrorAgent: Agent,
-  sourceEntries: readonly OutfitEntry[],
-) =>
-  Effect.gen(function* () {
-    const sourceDir = outfitDir(scope)
-    const mirrorDir = agentOutfitDir(scope, mirrorAgent)
+  canonicalDir: string,
+  mirrorDir: string,
+) => {
+  const mirrorNames = await readdir(mirrorDir).catch(() => [] as string[])
 
-    yield* ensureOutfitDir(mirrorDir)
+  const plans = await Promise.all(
+    mirrorNames.map(async (entryName) => {
+      const mirrorEntryPath = path.join(mirrorDir, entryName)
+      const canonicalEntryPath = path.join(canonicalDir, entryName)
+      const canonicalEntry = await lstatOrNull(canonicalEntryPath)
 
-    const desiredNames = new Set(sourceEntries.map((entry) => entry.name))
-    const existingNames = yield* Effect.tryPromise(() => readdir(mirrorDir)).pipe(
-      Effect.catchAll(() => Effect.succeed([] as string[])),
-    )
-
-    for (const name of existingNames) {
-      if (desiredNames.has(name)) continue
-      yield* Effect.tryPromise(() =>
-        rm(path.join(mirrorDir, name), { recursive: true, force: true }),
-      )
-    }
-
-    for (const entry of sourceEntries) {
-      const desiredTarget = path.join(sourceDir, entry.name)
-      const mirrorPath = path.join(mirrorDir, entry.name)
-      const existingStat = yield* Effect.tryPromise(() => lstat(mirrorPath)).pipe(
-        Effect.catchAll(() => Effect.succeed(null)),
-      )
-
-      if (existingStat?.isSymbolicLink()) {
-        const existingTarget = yield* Effect.tryPromise(() => readlink(mirrorPath)).pipe(
-          Effect.catchAll(() => Effect.succeed('')),
-        )
-        if (existingTarget === desiredTarget) {
-          continue
+      if (!canonicalEntry) {
+        return {
+          type: 'move' as const,
+          entryName,
+          mirrorEntryPath,
+          canonicalEntryPath,
         }
       }
 
-      if (existingStat) {
-        yield* Effect.tryPromise(() => rm(mirrorPath, { recursive: true, force: true }))
+      const [canonicalSnapshot, mirrorSnapshot] = await Promise.all([
+        snapshotSkillEntry(canonicalEntryPath),
+        snapshotSkillEntry(mirrorEntryPath),
+      ])
+
+      if (canonicalSnapshot !== mirrorSnapshot) {
+        return {
+          type: 'conflict' as const,
+          entryName,
+          mirrorEntryPath,
+          canonicalEntryPath,
+        }
       }
 
-      yield* Effect.tryPromise(() => symlink(desiredTarget, mirrorPath))
+      return {
+        type: 'drop' as const,
+        mirrorEntryPath,
+      }
+    }),
+  )
+
+  const conflict = plans.find((plan) => plan.type === 'conflict')
+  if (conflict?.type === 'conflict') {
+    throw new AgentOutfitConflictError({
+      scope,
+      canonicalAgent: CANONICAL_AGENT,
+      mirrorAgent,
+      skillName: conflict.entryName,
+      canonicalPath: conflict.canonicalEntryPath,
+      mirrorPath: conflict.mirrorEntryPath,
+    })
+  }
+
+  await Promise.all(
+    plans
+      .filter(
+        (plan): plan is Extract<(typeof plans)[number], { type: 'move' }> => plan.type === 'move',
+      )
+      .map((plan) => rename(plan.mirrorEntryPath, plan.canonicalEntryPath)),
+  )
+
+  await Promise.all(
+    plans
+      .filter(
+        (plan): plan is Extract<(typeof plans)[number], { type: 'drop' }> => plan.type === 'drop',
+      )
+      .map((plan) => rm(plan.mirrorEntryPath, { recursive: true, force: true })),
+  )
+}
+
+const ensureMirrorSymlink = async (canonicalDir: string, mirrorDir: string) => {
+  const mirrorLstat = await lstatOrNull(mirrorDir)
+  if (mirrorLstat?.isSymbolicLink()) {
+    const existingTarget = await readlink(mirrorDir).catch(() => '')
+    if (existingTarget === canonicalDir) return
+    if (await resolvesToSameDirectory(canonicalDir, mirrorDir)) return
+    await rm(mirrorDir, { recursive: true, force: true })
+  } else if (mirrorLstat) {
+    await rm(mirrorDir, { recursive: true, force: true })
+  }
+
+  await mkdir(path.dirname(mirrorDir), { recursive: true })
+  await symlink(canonicalDir, mirrorDir)
+}
+
+const reconcileMirrorOutfit = (scope: Scope, mirrorAgent: Agent) =>
+  Effect.tryPromise(async () => {
+    const canonicalDir = outfitDir(scope)
+    const mirrorDir = agentOutfitDir(scope, mirrorAgent)
+
+    await mkdir(path.dirname(canonicalDir), { recursive: true })
+    await mkdir(path.dirname(mirrorDir), { recursive: true })
+
+    const canonicalExists = await isDirectoryLike(canonicalDir)
+    const mirrorExists = await isDirectoryLike(mirrorDir)
+
+    if (!canonicalExists && !mirrorExists) {
+      await mkdir(canonicalDir, { recursive: true })
+      await ensureMirrorSymlink(canonicalDir, mirrorDir)
+      return
     }
+
+    if (!canonicalExists && mirrorExists) {
+      await mkdir(canonicalDir, { recursive: true })
+      await mergeMirrorEntriesIntoCanonical(scope, mirrorAgent, canonicalDir, mirrorDir)
+      await ensureMirrorSymlink(canonicalDir, mirrorDir)
+      return
+    }
+
+    if (canonicalExists && !mirrorExists) {
+      await ensureMirrorSymlink(canonicalDir, mirrorDir)
+      return
+    }
+
+    const mirrorLstat = await lstatOrNull(mirrorDir)
+    if (mirrorLstat?.isSymbolicLink()) {
+      const existingTarget = await readlink(mirrorDir).catch(() => '')
+      if (existingTarget === canonicalDir) return
+      if (await resolvesToSameDirectory(canonicalDir, mirrorDir)) return
+    }
+
+    await mergeMirrorEntriesIntoCanonical(scope, mirrorAgent, canonicalDir, mirrorDir)
+    await ensureMirrorSymlink(canonicalDir, mirrorDir)
   })
 
 export const syncAgentMirrors = (scope: Scope, config?: ShanConfig) =>
@@ -908,10 +1074,9 @@ export const syncAgentMirrors = (scope: Scope, config?: ShanConfig) =>
     const resolvedConfig = config ?? (yield* loadConfig())
     const configuredAgents = yield* resolveConfiguredAgents(resolvedConfig)
     const mirrorAgents = getMirrorAgents(configuredAgents)
-    const sourceEntries = yield* listOutfit(scope)
 
     for (const mirrorAgent of mirrorAgents) {
-      yield* syncMirrorOutfit(scope, mirrorAgent, sourceEntries)
+      yield* reconcileMirrorOutfit(scope, mirrorAgent)
     }
 
     if (scope === 'project') {

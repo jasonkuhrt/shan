@@ -1,12 +1,21 @@
 import { describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { mkdir, readlink, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readlink, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Aspects from './doctor-aspects.js'
 import * as Lib from './skill-library.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 const tmpBase = path.join(import.meta.dir, '__test_doctor_tmp__')
+
+const makeConfig = (agents: 'auto' | Lib.Agent[] = ['claude']): Lib.ShanConfig => ({
+  version: 1,
+  skills: {
+    historyLimit: 50,
+    defaultScope: 'project',
+    agents,
+  },
+})
 
 // ── Helper: create a minimal DoctorContext ────────────────────────
 
@@ -17,6 +26,8 @@ const makeContext = (overrides: Partial<Aspects.DoctorContext> = {}): Aspects.Do
   projectOutfit: [],
   projectOutfitDir: path.join(process.cwd(), '.claude/skills'),
   gitignoreEntries: [],
+  config: makeConfig(),
+  configuredAgents: ['claude'],
   ...overrides,
 })
 
@@ -24,7 +35,7 @@ const makeContext = (overrides: Partial<Aspects.DoctorContext> = {}): Aspects.Do
 
 describe('ALL_ASPECTS', () => {
   test('exports all aspects', () => {
-    expect(Aspects.ALL_ASPECTS.length).toBe(13)
+    expect(Aspects.ALL_ASPECTS.length).toBe(14)
   })
   test('each aspect has required fields', () => {
     for (const aspect of Aspects.ALL_ASPECTS) {
@@ -32,6 +43,154 @@ describe('ALL_ASPECTS', () => {
       expect(aspect.description).toBeTruthy()
       expect(['error', 'warning', 'info']).toContain(aspect.level)
       expect(typeof aspect.detect).toBe('function')
+    }
+  })
+})
+
+// ── agent-mirror ───────────────────────────────────────────────────
+
+describe('agent-mirror aspect', () => {
+  const aspect = Aspects.ALL_ASPECTS.find((a) => a.name === 'agent-mirror')!
+
+  test('no findings when no mirror agents are enabled', async () => {
+    const findings = await run(aspect.detect(makeContext()))
+    expect(findings).toEqual([])
+  })
+
+  test('detects missing codex project mirror when codex is enabled', async () => {
+    const dir = path.join(tmpBase, 'agent-mirror-detect')
+    const origCwd = process.cwd()
+
+    try {
+      await mkdir(path.join(dir, '.claude', 'skills', 'alpha'), { recursive: true })
+      await writeFile(path.join(dir, '.claude', 'skills', 'alpha', 'SKILL.md'), '# alpha')
+      process.chdir(dir)
+
+      const findings = await run(
+        aspect.detect(
+          makeContext({
+            config: makeConfig(['claude', 'codex']),
+            configuredAgents: ['claude', 'codex'],
+            projectOutfitDir: path.join(dir, '.claude', 'skills'),
+          }),
+        ),
+      )
+
+      const projectFinding = findings.find((finding) =>
+        finding.message.includes('[project] codex skills'),
+      )
+
+      expect(projectFinding).toBeDefined()
+      expect(projectFinding!.message).toContain('missing')
+      expect(projectFinding!.fixable).toBe(true)
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('fix creates codex project mirror symlink to claude outfit', async () => {
+    const dir = path.join(tmpBase, 'agent-mirror-fix')
+    const origCwd = process.cwd()
+
+    try {
+      await mkdir(path.join(dir, '.claude', 'skills', 'alpha'), { recursive: true })
+      await writeFile(path.join(dir, '.claude', 'skills', 'alpha', 'SKILL.md'), '# alpha')
+      process.chdir(dir)
+
+      const findings = await run(
+        aspect.detect(
+          makeContext({
+            config: makeConfig(['claude', 'codex']),
+            configuredAgents: ['claude', 'codex'],
+            projectOutfitDir: path.join(dir, '.claude', 'skills'),
+          }),
+        ),
+      )
+
+      const projectFinding = findings.find((finding) =>
+        finding.message.includes('[project] codex skills'),
+      )
+
+      expect(projectFinding).toBeDefined()
+      const result = await run(projectFinding!.fix!())
+      expect(result).toContain('reconciled codex skills mirror (project)')
+      expect(await readlink(path.join(dir, '.codex', 'skills'))).toBe(
+        path.join(dir, '.claude', 'skills'),
+      )
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('fix migrates a codex-owned real project directory when claude outfit is missing', async () => {
+    const dir = path.join(tmpBase, 'agent-mirror-migrate')
+    const origCwd = process.cwd()
+
+    try {
+      await mkdir(path.join(dir, '.codex', 'skills', 'alpha'), { recursive: true })
+      await writeFile(path.join(dir, '.codex', 'skills', 'alpha', 'SKILL.md'), '# alpha')
+      process.chdir(dir)
+
+      const findings = await run(
+        aspect.detect(
+          makeContext({
+            config: makeConfig(['claude', 'codex']),
+            configuredAgents: ['claude', 'codex'],
+            projectOutfitDir: path.join(dir, '.claude', 'skills'),
+          }),
+        ),
+      )
+
+      const projectFinding = findings.find((finding) =>
+        finding.message.includes('[project] codex skills'),
+      )
+
+      expect(projectFinding).toBeDefined()
+      await run(projectFinding!.fix!())
+      expect(await readlink(path.join(dir, '.codex', 'skills'))).toBe(
+        path.join(dir, '.claude', 'skills'),
+      )
+      expect(
+        await readFile(path.join(dir, '.claude', 'skills', 'alpha', 'SKILL.md'), 'utf-8'),
+      ).toBe('# alpha')
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('accepts project mirrors that resolve to the same canonical directory through different symlink paths', async () => {
+    const dir = path.join(tmpBase, 'agent-mirror-resolved-match')
+    const origCwd = process.cwd()
+
+    try {
+      const sharedDir = path.join(dir, 'shared-skills')
+      await mkdir(sharedDir, { recursive: true })
+      await mkdir(path.join(dir, '.claude'), { recursive: true })
+      await mkdir(path.join(dir, '.codex'), { recursive: true })
+      await symlink(sharedDir, path.join(dir, '.claude', 'skills'))
+      await symlink(sharedDir, path.join(dir, '.codex', 'skills'))
+      process.chdir(dir)
+
+      const findings = await run(
+        aspect.detect(
+          makeContext({
+            config: makeConfig(['claude', 'codex']),
+            configuredAgents: ['claude', 'codex'],
+            projectOutfitDir: path.join(dir, '.claude', 'skills'),
+          }),
+        ),
+      )
+
+      const projectFinding = findings.find((finding) =>
+        finding.message.includes('[project] codex skills'),
+      )
+      expect(projectFinding).toBeUndefined()
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
     }
   })
 })
@@ -229,6 +388,16 @@ describe('stale-gitignore aspect', () => {
           symlinkTarget: '/lib/active_skill',
         }),
       ],
+    })
+    const findings = await run(aspect.detect(ctx))
+    expect(findings).toEqual([])
+  })
+
+  test('ignores configured mirror gitignore entries', async () => {
+    const ctx = makeContext({
+      gitignoreEntries: ['.codex/skills'],
+      config: makeConfig(['claude', 'codex']),
+      configuredAgents: ['claude', 'codex'],
     })
     const findings = await run(aspect.detect(ctx))
     expect(findings).toEqual([])
