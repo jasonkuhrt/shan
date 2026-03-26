@@ -19,6 +19,7 @@ import {
 } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from './skill-library.js'
+import * as SkillName from './skill-name.js'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -331,8 +332,8 @@ const stateDrift: DoctorAspect = {
 /** Find a library entry by its flattened name. */
 const findLibraryByFlatName = (flatName: string, libDir: string) =>
   Effect.gen(function* () {
-    // Try direct path (flat name → replace _ with /)
-    const relPath = flatName.replaceAll('_', '/')
+    // Try the canonical hierarchical path first.
+    const relPath = Lib.unflattenName(flatName)
     const candidate = path.join(libDir, relPath)
     const exists = yield* checkSymlinkTarget(candidate)
     if (exists) return candidate
@@ -357,9 +358,9 @@ const orphanedRouter: DoctorAspect = {
       )) {
         const routers = yield* Lib.detectGeneratedRouters(outfit.scope)
         for (const router of routers) {
-          const prefix = router + '_'
           const hasChildren = outfit.entries.some(
-            (e) => e.commitment === 'pluggable' && e.name.startsWith(prefix),
+            (entry) =>
+              entry.commitment === 'pluggable' && SkillName.isFlatNameInGroup(entry.name, router),
           )
           if (!hasChildren) {
             const routerPath = path.join(Lib.outfitDir(outfit.scope), router)
@@ -430,7 +431,10 @@ const staleGitignore: DoctorAspect = {
 
 // ── Mismatch classification helpers ──────────────────────────────
 
-const stripSeparators = (s: string): string => s.replaceAll(/[:_-]/g, '')
+const stripSeparators = (value: string): string => {
+  const parsed = SkillName.parseFrontmatterName(value)
+  return parsed ? SkillName.stripSeparators(parsed) : value.replaceAll(/[:_-]/g, '')
+}
 
 export type MismatchClassification = 'separator_only' | 'namespace_relocation' | 'complete_rename'
 
@@ -439,21 +443,25 @@ export const classifyMismatch = (
   fmName: string,
   namespaceCensus: Map<string, number>,
 ): MismatchClassification => {
+  const dirName = SkillName.parseFrontmatterName(dirColonName)
+  const frontmatterName = SkillName.parseFrontmatterName(fmName)
+
   // SEPARATOR_ONLY: same string after stripping all separators, AND both names
   // already use colons (i.e. the author is just restructuring nesting within the
   // same namespace, not introducing a new colon-delimited level from scratch).
   if (
     stripSeparators(dirColonName) === stripSeparators(fmName) &&
-    dirColonName.includes(':') &&
-    fmName.includes(':')
+    dirName &&
+    frontmatterName &&
+    SkillName.isNamespaced(dirName) &&
+    SkillName.isNamespaced(frontmatterName)
   ) {
     return 'separator_only'
   }
 
   // NAMESPACE_RELOCATION: FM name uses a colon-prefix with an established namespace
-  const fmColonIndex = fmName.indexOf(':')
-  if (fmColonIndex !== -1) {
-    const fmPrefix = fmName.slice(0, fmColonIndex)
+  if (frontmatterName && SkillName.isNamespaced(frontmatterName)) {
+    const fmPrefix = SkillName.topLevelName(frontmatterName)
     const count = namespaceCensus.get(fmPrefix) ?? 0
     if (count >= 2) {
       return 'namespace_relocation'
@@ -466,10 +474,9 @@ export const classifyMismatch = (
 export const buildNamespaceCensus = (library: Lib.SkillInfo[]): Map<string, number> => {
   const census = new Map<string, number>()
   for (const skill of library) {
-    const parts = skill.colonName.split(':')
-    // Generate every colon-prefix (e.g. a:b:c contributes to "a" and "a:b")
-    for (let depth = 1; depth < parts.length; depth++) {
-      const prefix = parts.slice(0, depth).join(':')
+    const name = SkillName.parseFrontmatterName(skill.colonName)
+    if (!name) continue
+    for (const prefix of SkillName.prefixes(name)) {
       census.set(prefix, (census.get(prefix) ?? 0) + 1)
     }
   }
@@ -513,7 +520,8 @@ const frontmatterMismatch: DoctorAspect = {
             ),
           )
         } else if (classification === 'namespace_relocation') {
-          const fmPrefix = fmName.slice(0, fmName.indexOf(':'))
+          const parsedFmName = SkillName.parseFrontmatterName(fmName)
+          const fmPrefix = parsedFmName ? SkillName.topLevelName(parsedFmName) : fmName
           const peerCount = census.get(fmPrefix) ?? 0
           findings.push(
             finding(
@@ -526,9 +534,9 @@ const frontmatterMismatch: DoctorAspect = {
           )
         } else {
           // COMPLETE_RENAME or NAMESPACE_RELOCATION with insufficient peers
-          const fmColonIndex = fmName.indexOf(':')
-          if (fmColonIndex !== -1) {
-            const fmPrefix = fmName.slice(0, fmColonIndex)
+          const parsedFmName = SkillName.parseFrontmatterName(fmName)
+          if (parsedFmName && SkillName.isNamespaced(parsedFmName)) {
+            const fmPrefix = SkillName.topLevelName(parsedFmName)
             const peerCount = census.get(fmPrefix) ?? 0
             findings.push(
               finding(
@@ -871,6 +879,8 @@ const newLeaf: DoctorAspect = {
 
         // For each library skill, check if its parent group is installed but this leaf isn't
         for (const skill of ctx.library) {
+          const parsedSkillName = SkillName.parseLibraryRelPath(skill.libraryRelPath)
+          if (!parsedSkillName) continue
           const flat = Lib.flattenName(skill.libraryRelPath)
           if (installedNames.has(flat)) continue // already installed
 
@@ -878,36 +888,32 @@ const newLeaf: DoctorAspect = {
           if (skill.libraryScope !== outfit.scope) continue
 
           // Check if any parent group prefix is installed
-          const parts = flat.split('_')
-          for (let depth = 1; depth < parts.length; depth++) {
-            const groupPrefix = parts.slice(0, depth).join('_')
-            // Check if a sibling of this skill is installed (meaning the group was turned on)
-            const siblingPrefix = groupPrefix + '_'
-            const hasSibling = [...installedNames].some(
-              (n) => n.startsWith(siblingPrefix) && n !== flat,
+          const hasSibling = SkillName.prefixes(parsedSkillName).some((groupPrefix) => {
+            const siblingPrefix = SkillName.flatGroupPrefix(groupPrefix)
+            return [...installedNames].some(
+              (installedName) => installedName !== flat && installedName.startsWith(siblingPrefix),
             )
-            if (hasSibling) {
-              const linkPath = path.join(Lib.outfitDir(outfit.scope), flat)
-              const relPath = skill.libraryRelPath
-              const libPath = path.join(skill.libraryDir, relPath)
-              findings.push(
-                finding(
-                  'new-leaf',
-                  'warning',
-                  `[${outfit.label}] ${skill.colonName} — group has siblings installed`,
-                  true,
-                  () =>
-                    Effect.gen(function* () {
-                      yield* Effect.tryPromise(() =>
-                        mkdir(path.dirname(linkPath), { recursive: true }),
-                      )
-                      yield* Effect.tryPromise(() => symlink(libPath, linkPath))
-                      return `symlinked new leaf: ${skill.colonName} (${outfit.label})`
-                    }),
-                ),
-              )
-              break
-            }
+          })
+          if (hasSibling) {
+            const linkPath = path.join(Lib.outfitDir(outfit.scope), flat)
+            const relPath = skill.libraryRelPath
+            const libPath = path.join(skill.libraryDir, relPath)
+            findings.push(
+              finding(
+                'new-leaf',
+                'warning',
+                `[${outfit.label}] ${skill.colonName} — group has siblings installed`,
+                true,
+                () =>
+                  Effect.gen(function* () {
+                    yield* Effect.tryPromise(() =>
+                      mkdir(path.dirname(linkPath), { recursive: true }),
+                    )
+                    yield* Effect.tryPromise(() => symlink(libPath, linkPath))
+                    return `symlinked new leaf: ${skill.colonName} (${outfit.label})`
+                  }),
+              ),
+            )
           }
         }
       }
@@ -937,8 +943,10 @@ const staleRouter: DoctorAspect = {
           if (!currentContent) continue
 
           // Get current library children for this group
-          const groupPrefix = routerName + ':'
-          const children = ctx.library.filter((s) => s.colonName.startsWith(groupPrefix))
+          const children = ctx.library.filter((skill) => {
+            const parsedName = SkillName.parseFrontmatterName(skill.colonName)
+            return parsedName ? SkillName.isUnderTopLevelGroup(parsedName, routerName) : false
+          })
           const expected = Lib.generateRouter(routerName, children)
 
           if (currentContent !== expected) {

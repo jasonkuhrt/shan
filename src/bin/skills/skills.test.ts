@@ -12,6 +12,7 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
+import * as SkillName from '../../lib/skill-name.js'
 
 const repoRoot = path.resolve(import.meta.dir, '../../../')
 
@@ -104,7 +105,7 @@ const setupTestEnv = async (options: TestEnvOptions = {}): Promise<TestEnv> => {
   const projectOutfit = path.join(project, '.claude/skills')
 
   const addSkill = async (libraryDir: string, colonName: string) => {
-    const relPath = colonName.replaceAll(':', '/')
+    const relPath = SkillName.toLibraryRelPath(SkillName.fromFrontmatterName(colonName))
     const skillDir = path.join(libraryDir, relPath)
     await mkdir(skillDir, { recursive: true })
     await writeFile(path.join(skillDir, 'SKILL.md'), skillMd(colonName))
@@ -256,68 +257,113 @@ describe('skills on/off project scope', () => {
   })
 })
 
-// ── cross-scope guard ────────────────────────────────────────────────
+// ── on scope inference ───────────────────────────────────────────────
 
-describe('cross-scope guard', () => {
-  test('on at project scope should NOT activate a skill that only exists in user library', async () => {
+describe('on scope inference', () => {
+  test('without an explicit scope, activates a user-library skill at user scope when the project library is missing', async () => {
     const env = await setupTestEnv()
     try {
-      // Skill exists in user library but is NOT activated at user scope
-      await env.addUserLibrarySkill('align')
+      await env.addUserLibrarySkill('codex-review')
+      await rm(env.projectLibrary, { recursive: true, force: true })
+
+      const result = await env.run(['skills', 'on', 'codex-review'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('codex-review')
+      expect(result.stdout).toContain('user')
+
+      const userLink = await lstat(path.join(env.userOutfit, 'codex-review'))
+      expect(userLink.isSymbolicLink()).toBe(true)
+
+      const projectLink = await lstat(path.join(env.projectOutfit, 'codex-review')).catch(
+        () => null,
+      )
+      expect(projectLink).toBeNull()
+
+      const state = await readState(env.home)
+      expect(await getInstalls(state, 'global')).toContain('codex-review')
+      expect(await getInstalls(state, env.project)).not.toContain('codex-review')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('without an explicit scope, activates a user-library group at user scope when the project library lacks the target', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addProjectLibrarySkill('project-only')
       await env.addUserLibrarySkill('align:go')
       await env.addUserLibrarySkill('align:once')
 
-      // Attempt to turn it on at project scope (the default)
-      const result = await env.run(['skills', 'on', 'align'])
-
-      // This should fail — the skill lives in user library, not project library.
-      // Activating user-library skills at project scope without them being on at
-      // user scope is a scope-crossing violation.
-      expect(result.exitCode).not.toBe(0)
-
-      // Verify no symlinks were created in the project outfit
-      const alignExists = await lstat(path.join(env.projectOutfit, 'align')).catch(() => null)
-      const alignGoExists = await lstat(path.join(env.projectOutfit, 'align_go')).catch(() => null)
-      const alignOnceExists = await lstat(path.join(env.projectOutfit, 'align_once')).catch(
-        () => null,
-      )
-      expect(alignExists).toBeNull()
-      expect(alignGoExists).toBeNull()
-      expect(alignOnceExists).toBeNull()
-    } finally {
-      await env.cleanup()
-    }
-  })
-
-  test('on at project scope SHOULD work for skills in project library', async () => {
-    const env = await setupTestEnv()
-    try {
-      // Skill exists in PROJECT library — this is the valid path
-      await env.addProjectLibrarySkill('align')
-      await env.addProjectLibrarySkill('align:go')
-
       const result = await env.run(['skills', 'on', 'align'])
       expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('align:go')
+      expect(result.stdout).toContain('align:once')
+      expect(result.stdout).toContain('user')
 
-      // Symlinks should be created in project outfit
-      const alignLink = await lstat(path.join(env.projectOutfit, 'align'))
-      expect(alignLink.isSymbolicLink()).toBe(true)
+      const alignGoLink = await lstat(path.join(env.userOutfit, 'align_go'))
+      const alignOnceLink = await lstat(path.join(env.userOutfit, 'align_once'))
+      expect(alignGoLink.isSymbolicLink()).toBe(true)
+      expect(alignOnceLink.isSymbolicLink()).toBe(true)
+
+      const routerSkillMd = await readFile(path.join(env.userOutfit, 'align', 'SKILL.md'), 'utf-8')
+      expect(routerSkillMd).toContain('align:go')
+      expect(routerSkillMd).toContain('align:once')
+
+      const projectAlign = await lstat(path.join(env.projectOutfit, 'align')).catch(() => null)
+      const projectAlignGo = await lstat(path.join(env.projectOutfit, 'align_go')).catch(() => null)
+      const projectAlignOnce = await lstat(path.join(env.projectOutfit, 'align_once')).catch(
+        () => null,
+      )
+      expect(projectAlign).toBeNull()
+      expect(projectAlignGo).toBeNull()
+      expect(projectAlignOnce).toBeNull()
+
+      const state = await readState(env.home)
+      expect(await getInstalls(state, 'global')).toContain('align_go')
+      expect(await getInstalls(state, 'global')).toContain('align_once')
+      expect(await getInstalls(state, env.project)).not.toContain('align_go')
+      expect(await getInstalls(state, env.project)).not.toContain('align_once')
     } finally {
       await env.cleanup()
     }
   })
 
-  test('on at project scope rejects user-library skills even if active at user scope', async () => {
+  test('without an explicit scope, prefers the project library when a target exists in both scopes', async () => {
     const env = await setupTestEnv()
     try {
-      // Skill in user library AND turned on at user scope
+      await env.addUserLibrarySkill('shared')
+      await env.addProjectLibrarySkill('shared')
+
+      const result = await env.run(['skills', 'on', 'shared'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('project')
+
+      const projectLink = await lstat(path.join(env.projectOutfit, 'shared'))
+      expect(projectLink.isSymbolicLink()).toBe(true)
+
+      const userLink = await lstat(path.join(env.userOutfit, 'shared')).catch(() => null)
+      expect(userLink).toBeNull()
+
+      const state = await readState(env.home)
+      expect(await getInstalls(state, env.project)).toContain('shared')
+      expect(await getInstalls(state, 'global')).not.toContain('shared')
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('with an explicit project scope, still rejects a target that only exists in the user library', async () => {
+    const env = await setupTestEnv()
+    try {
       await env.addUserLibrarySkill('shared')
       await env.run(['skills', 'on', 'shared', '--scope', 'user'])
 
-      // Activating at project scope should fail — resolveTarget(strict=true)
-      // only searches the project library, so it's simply "not found".
-      const result = await env.run(['skills', 'on', 'shared'])
+      const result = await env.run(['skills', 'on', 'shared', '--scope', 'project'])
+      expect(result.exitCode).not.toBe(0)
       expect(result.stdout).toContain('not found in library')
+
+      const projectLink = await lstat(path.join(env.projectOutfit, 'shared')).catch(() => null)
+      expect(projectLink).toBeNull()
     } finally {
       await env.cleanup()
     }
@@ -469,6 +515,137 @@ describe('skills move scope down', () => {
       const result = await env.run(['skills', 'move', 'scope', 'down', 'projonly'])
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain('already at project scope')
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+// ── move: core skill scenarios ───────────────────────────────────────
+
+describe('skills move core skill scope up', () => {
+  test('move a core skill (real directory) from project to user outfit', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Create a core skill directly in project outfit (real dir, not symlink)
+      const coreDir = path.join(env.projectOutfit, 'my-core')
+      await mkdir(coreDir, { recursive: true })
+      await writeFile(path.join(coreDir, 'SKILL.md'), skillMd('my-core'))
+
+      const result = await env.run(['skills', 'move', 'scope', 'up', 'my-core'])
+      expect(result.exitCode).toBe(0)
+
+      // Should now be a directory in user outfit
+      const userPath = path.join(env.userOutfit, 'my-core')
+      const stat = await lstat(userPath)
+      expect(stat.isDirectory()).toBe(true)
+
+      // Should be gone from project outfit
+      const projExists = await lstat(coreDir).catch(() => null)
+      expect(projExists).toBeNull()
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+describe('skills move core skill scope down', () => {
+  test('move a core skill (real directory) from user to project outfit', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Create a core skill directly in user outfit (real dir, not symlink)
+      const coreDir = path.join(env.userOutfit, 'user-core')
+      await mkdir(coreDir, { recursive: true })
+      await writeFile(path.join(coreDir, 'SKILL.md'), skillMd('user-core'))
+
+      const result = await env.run(['skills', 'move', 'scope', 'down', 'user-core'])
+      expect(result.exitCode).toBe(0)
+
+      // Should now be a directory in project outfit
+      const projPath = path.join(env.projectOutfit, 'user-core')
+      const stat = await lstat(projPath)
+      expect(stat.isDirectory()).toBe(true)
+
+      // Should be gone from user outfit
+      const userExists = await lstat(coreDir).catch(() => null)
+      expect(userExists).toBeNull()
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+// ── undo/redo additional paths ──────────────────────────────────────
+
+describe('undo and redo with groups', () => {
+  test('undo a single on, then redo it', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('undoredo-single')
+
+      // Turn on
+      const onResult = await env.run(['skills', 'on', 'undoredo-single', '--scope', 'user'])
+      expect(onResult.exitCode).toBe(0)
+
+      // Undo
+      const undoResult = await env.run(['skills', 'undo', '--scope', 'user'])
+      expect(undoResult.exitCode).toBe(0)
+      const gone = await lstat(path.join(env.userOutfit, 'undoredo-single')).catch(() => null)
+      expect(gone).toBeNull()
+
+      // Redo
+      const redoResult = await env.run(['skills', 'redo', '--scope', 'user'])
+      expect(redoResult.exitCode).toBe(0)
+      const back = await lstat(path.join(env.userOutfit, 'undoredo-single'))
+      expect(back.isSymbolicLink()).toBe(true)
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('redo after off restores skills', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('redo-me')
+      await env.run(['skills', 'on', 'redo-me', '--scope', 'user'])
+
+      // Off
+      await env.run(['skills', 'off', 'redo-me', '--scope', 'user'])
+      const gone = await lstat(path.join(env.userOutfit, 'redo-me')).catch(() => null)
+      expect(gone).toBeNull()
+
+      // Undo the off (restores the on)
+      await env.run(['skills', 'undo', '--scope', 'user'])
+      const restored = await lstat(path.join(env.userOutfit, 'redo-me'))
+      expect(restored.isSymbolicLink()).toBe(true)
+
+      // Redo the off (re-removes)
+      await env.run(['skills', 'redo', '--scope', 'user'])
+      const reGone = await lstat(path.join(env.userOutfit, 'redo-me')).catch(() => null)
+      expect(reGone).toBeNull()
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('undo multiple operations at once', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('multi-a')
+      await env.addUserLibrarySkill('multi-b')
+
+      await env.run(['skills', 'on', 'multi-a', '--scope', 'user'])
+      await env.run(['skills', 'on', 'multi-b', '--scope', 'user'])
+
+      // Undo 2 at once
+      const result = await env.run(['skills', 'undo', '2', '--scope', 'user'])
+      expect(result.exitCode).toBe(0)
+
+      // Both should be gone
+      for (const name of ['multi-a', 'multi-b']) {
+        const exists = await lstat(path.join(env.userOutfit, name)).catch(() => null)
+        expect(exists).toBeNull()
+      }
     } finally {
       await env.cleanup()
     }
@@ -748,7 +925,7 @@ describe('libraryExists scope guard', () => {
     }
   })
 
-  test('on at project scope fails when only user library exists', async () => {
+  test('on with an explicit project scope fails when only user library exists', async () => {
     const env = await setupTestEnv()
     try {
       await env.addUserLibrarySkill('onlyuser2')
@@ -756,7 +933,7 @@ describe('libraryExists scope guard', () => {
       // Remove the project library
       await rm(env.projectLibrary, { recursive: true, force: true })
 
-      const result = await env.run(['skills', 'on', 'onlyuser2'])
+      const result = await env.run(['skills', 'on', 'onlyuser2', '--scope', 'project'])
       expect(result.exitCode).not.toBe(0)
       expect(result.stderr).toContain('No skills library found')
     } finally {

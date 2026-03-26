@@ -9,14 +9,13 @@ import { Console, Effect } from 'effect'
 import { lstat, mkdir, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from '../../lib/skill-library.js'
+import * as SkillName from '../../lib/skill-name.js'
 
 export interface SkillsCreateOptions {
   readonly scope: Lib.Scope
 }
 
-const VALID_SEGMENT = /^[a-zA-Z][a-zA-Z0-9_-]*$/
-const VALID_NAME = (name: string): boolean =>
-  name.split(':').every((segment) => VALID_SEGMENT.test(segment))
+const VALID_NAME = (name: string): boolean => SkillName.parseFrontmatterName(name) !== null
 
 const yamlQuote = (value: string): string =>
   /[:#{}&*!|>'"%@`,?]|\[|\]/.test(value)

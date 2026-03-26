@@ -12,6 +12,7 @@ import { lstat, rename } from 'node:fs/promises'
 import * as path from 'node:path'
 import { Console, Effect } from 'effect'
 import * as Lib from '../../lib/skill-library.js'
+import * as SkillName from '../../lib/skill-name.js'
 import { skillsMove } from './move.js'
 import { skillsOn } from './on.js'
 
@@ -178,8 +179,9 @@ export const skillsInstall = (source: string, options: SkillsInstallOptions) =>
     const topGroups = [
       ...new Set(
         canonicalNames.flatMap((name) => {
-          const topGroup = name.includes(':') ? [name.split(':')[0] ?? ''] : []
-          return topGroup.filter(Boolean)
+          const parsedName = SkillName.parseFrontmatterName(name)
+          if (!parsedName || !SkillName.isNamespaced(parsedName)) return []
+          return [SkillName.topLevelName(parsedName)]
         }),
       ),
     ]

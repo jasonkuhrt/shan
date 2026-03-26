@@ -34,6 +34,7 @@ import { buildLintContext } from './lint/context.js'
 import { renderFinding, renderSummary } from './lint/finding.js'
 import type { MoveAxis, MoveDirection } from './skills/move.js'
 import type { Scope } from '../lib/skill-library.js'
+import * as Lib from '../lib/skill-library.js'
 
 const USAGE = `
 shan - agent tooling CLI
@@ -172,6 +173,35 @@ export const parseArgs = (args: string[]) => {
 export const resolveScope = (flags: ParsedFlags): Scope =>
   flags.global ? 'user' : flags.scope === 'user' ? 'user' : 'project'
 
+const resolveAllTargetsInScope = (targets: readonly string[], scope: Scope) =>
+  Effect.gen(function* () {
+    for (const target of targets) {
+      const resolved = yield* Lib.resolveTarget(target, scope)
+      if (!resolved) return false
+    }
+    return true
+  })
+
+export const resolveSkillsOnScope = (flags: ParsedFlags, targetInput: string) =>
+  Effect.gen(function* () {
+    if (flags.global || flags.scope === 'user') return 'user' as const
+    if (flags.scope === 'project') return 'project' as const
+
+    const targets = Lib.parseTargets(targetInput)
+    if (targets.length === 0) return 'project' as const
+
+    const projectLibraryExists = yield* Lib.libraryExists('project')
+    if (!projectLibraryExists) {
+      const userLibraryExists = yield* Lib.libraryExists('user')
+      return userLibraryExists ? ('user' as const) : ('project' as const)
+    }
+
+    if (yield* resolveAllTargetsInScope(targets, 'project')) return 'project' as const
+    if (yield* resolveAllTargetsInScope(targets, 'user')) return 'user' as const
+
+    return 'project' as const
+  })
+
 export const program = Effect.gen(function* () {
   const [namespace, command, ...args] = process.argv.slice(2)
 
@@ -212,7 +242,10 @@ export const program = Effect.gen(function* () {
     }
   } else if (namespace === 'skills') {
     const { flags, positional } = parseArgs(args)
-    const scope = resolveScope(flags)
+    const scope =
+      command === 'on'
+        ? yield* resolveSkillsOnScope(flags, positional[0] ?? '')
+        : resolveScope(flags)
 
     if (command === 'on') {
       yield* skillsOn(positional[0] ?? '', { scope, strict: flags.strict })

@@ -9,6 +9,7 @@ import { Console, Effect } from 'effect'
 import { lstat, mkdir, symlink, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from '../../lib/skill-library.js'
+import * as SkillName from '../../lib/skill-name.js'
 
 export interface SkillsOnOptions {
   readonly scope: Lib.Scope
@@ -66,9 +67,10 @@ export const skillsOn = (targetInput: string, options: SkillsOnOptions) =>
 
       // Track top-level group for router generation (with its library dir)
       if (resolved.nodeType === 'group' || resolved.nodeType === 'callable-group') {
-        const topGroup = target.split(':')[0] ?? target
-        if (topGroup === target || !target.includes(':')) {
-          groupsToRoute.set(topGroup, resolved.libraryDir)
+        const parsedTarget = SkillName.parseFrontmatterName(target)
+        if (!parsedTarget || !SkillName.isNamespaced(parsedTarget)) {
+          const groupName = parsedTarget ? SkillName.topLevelName(parsedTarget) : target
+          groupsToRoute.set(groupName, resolved.libraryDir)
         }
       }
 

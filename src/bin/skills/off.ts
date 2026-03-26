@@ -6,10 +6,11 @@
  * Two-phase execution: validate all targets first, abort on any error, then execute.
  */
 
-import { Console, Effect } from 'effect'
+import { Console, Effect, Option } from 'effect'
 import { lstat, rm, unlink } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from '../../lib/skill-library.js'
+import * as SkillName from '../../lib/skill-name.js'
 
 export interface SkillsOffOptions {
   readonly scope: Lib.Scope
@@ -58,9 +59,9 @@ export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
 
       // Track top-level group for router cleanup
       if (resolved.nodeType === 'group' || resolved.nodeType === 'callable-group') {
-        const topGroup = target.split(':')[0] ?? target
-        if (topGroup === target || !target.includes(':')) {
-          groupsToClean.add(topGroup)
+        const parsedTarget = SkillName.parseFrontmatterName(target)
+        if (!parsedTarget || !SkillName.isNamespaced(parsedTarget)) {
+          groupsToClean.add(parsedTarget ? SkillName.topLevelName(parsedTarget) : target)
         }
       }
 
@@ -191,9 +192,7 @@ const resetAll = (dir: string, scope: Lib.Scope) =>
 
     for (const entry of outfit) {
       if (entry.commitment === 'pluggable') {
-        yield* Effect.tryPromise(() => unlink(path.join(dir, entry.name))).pipe(
-          Effect.catchAll(() => Effect.void),
-        )
+        yield* Effect.ignore(Effect.tryPromise(() => unlink(path.join(dir, entry.name))))
         removed++
         removedNames.push(entry.name)
       } else {
@@ -210,9 +209,7 @@ const resetAll = (dir: string, scope: Lib.Scope) =>
     // Cleanup all generated routers
     const routers = yield* Lib.detectGeneratedRouters(scope)
     for (const router of routers) {
-      yield* Effect.tryPromise(() => rm(path.join(dir, router), { recursive: true })).pipe(
-        Effect.catchAll(() => Effect.void),
-      )
+      yield* Effect.ignore(Effect.tryPromise(() => rm(path.join(dir, router), { recursive: true })))
     }
 
     // Clear current installs for this scope
@@ -243,15 +240,14 @@ const resetAll = (dir: string, scope: Lib.Scope) =>
     yield* Console.log(
       `Reset: ${removed} pluggable skills turned off (${coreSkipped} core skills untouched)`,
     )
+    yield* Lib.printSlashCommandNotice
   })
 
 /** Remove an auto-generated router directory if it exists. */
-const cleanupRouter = (outfitDir: string, groupName: string, scope: Lib.Scope) =>
+export const cleanupRouter = (outfitDir: string, groupName: string, scope: Lib.Scope) =>
   Effect.gen(function* () {
     const routerPath = path.join(outfitDir, groupName)
-    const stat = yield* Effect.tryPromise(() => lstat(routerPath)).pipe(
-      Effect.catchAll(() => Effect.succeed(null)),
-    )
+    const stat = Option.getOrNull(yield* Effect.option(Effect.tryPromise(() => lstat(routerPath))))
     if (!stat) return
 
     // Only remove if it's a real directory (not a symlink = not core)
@@ -259,17 +255,18 @@ const cleanupRouter = (outfitDir: string, groupName: string, scope: Lib.Scope) =
     if (stat.isDirectory() && !stat.isSymbolicLink()) {
       for (const libDir of Lib.librarySearchOrder(scope)) {
         const libPath = path.join(libDir, groupName)
-        const libExists = yield* Effect.tryPromise(async () => {
-          const s = await lstat(libPath)
-          return s.isDirectory()
-        }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+        const libStat = yield* Effect.option(
+          Effect.tryPromise(async () => {
+            const s = await lstat(libPath)
+            return s
+          }),
+        )
+        const libExists = Option.isSome(libStat) && libStat.value.isDirectory()
 
         if (libExists) {
           const nodeType = yield* Lib.getNodeType(libPath)
           if (nodeType === 'group' || nodeType === 'callable-group') {
-            yield* Effect.tryPromise(() => rm(routerPath, { recursive: true })).pipe(
-              Effect.catchAll(() => Effect.void),
-            )
+            yield* Effect.ignore(Effect.tryPromise(() => rm(routerPath, { recursive: true })))
             return
           }
         }

@@ -805,6 +805,62 @@ describe('frontmatter-mismatch fix action', () => {
     }
   })
 
+  test('fix updates state when a namespace relocation changes the flattened install name', async () => {
+    const libDir = path.join(tmpBase, 'fm-fix-state')
+    const oldDir = path.join(libDir, 'doctor')
+    const originalState = await run(Lib.loadState())
+
+    try {
+      await mkdir(oldDir, { recursive: true })
+      await writeFile(path.join(oldDir, 'SKILL.md'), '---\nname: ref:doctor\n---\ntest')
+      await run(
+        Lib.saveState({
+          version: 2,
+          current: {
+            global: { installs: ['doctor'] },
+          },
+          history: {},
+        }),
+      )
+
+      const ctx = makeContext({
+        library: [
+          {
+            colonName: 'doctor',
+            libraryRelPath: 'doctor',
+            libraryDir: libDir,
+            libraryScope: 'user',
+            frontmatter: { name: 'ref:doctor', description: 'desc' },
+          },
+          {
+            colonName: 'ref:guide',
+            libraryRelPath: 'ref/guide',
+            libraryDir: libDir,
+            libraryScope: 'user',
+            frontmatter: { name: 'ref:guide', description: 'desc' },
+          },
+          {
+            colonName: 'ref:helper',
+            libraryRelPath: 'ref/helper',
+            libraryDir: libDir,
+            libraryScope: 'user',
+            frontmatter: { name: 'ref:helper', description: 'desc' },
+          },
+        ],
+      })
+
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toHaveLength(1)
+      await run(findings[0]!.fix!())
+
+      const updatedState = await run(Lib.loadState())
+      expect(updatedState.current['global']?.installs).toEqual(['ref_doctor'])
+    } finally {
+      await run(Lib.saveState(originalState))
+      await rm(libDir, { recursive: true, force: true })
+    }
+  })
+
   test('fix errors when target directory already exists', async () => {
     const libDir = path.join(tmpBase, 'fm-fix-exists')
     const oldDir = path.join(libDir, 'align', 'once_system')
@@ -2070,10 +2126,24 @@ describe('orphaned-router with real outfit', () => {
     try {
       // Create a matching group in library
       await mkdir(path.join(libRouterDir, 'child'), { recursive: true })
-      await writeFile(path.join(libRouterDir, 'child', 'SKILL.md'), '---\nname: child\n---\n')
+      await writeFile(
+        path.join(libRouterDir, 'child', 'SKILL.md'),
+        `---\nname: __test_orphan_router__:child\ndescription: child\n---\n`,
+      )
       // Create the router dir in outfit (core commitment)
       await mkdir(routerDir, { recursive: true })
-      await writeFile(path.join(routerDir, 'SKILL.md'), 'router')
+      await writeFile(
+        path.join(routerDir, 'SKILL.md'),
+        Lib.generateRouter('__test_orphan_router__', [
+          {
+            colonName: '__test_orphan_router__:child',
+            libraryRelPath: '__test_orphan_router__/child',
+            libraryDir: Lib.LIBRARY_DIR,
+            libraryScope: 'user',
+            frontmatter: { name: '__test_orphan_router__:child', description: 'child' },
+          },
+        ]),
+      )
 
       const outfit = await run(Lib.listOutfit('user'))
       const ctx = makeContext({
@@ -2319,6 +2389,190 @@ describe('stale-shadow deeper coverage', () => {
     })
     const findings = await run(aspect.detect(ctx))
     expect(findings).toEqual([])
+  })
+})
+
+describe('state-drift hierarchical restore', () => {
+  const aspect = Aspects.ALL_ASPECTS.find((a) => a.name === 'state-drift')!
+
+  test('restores namespaced project installs from canonical library paths', async () => {
+    const dir = path.join(tmpBase, 'state-drift-hierarchical-restore')
+    const origCwd = process.cwd()
+
+    try {
+      await mkdir(dir, { recursive: true })
+      process.chdir(dir)
+      const skillDir = path.join(dir, '.claude', 'skills-library', 'align', 'once')
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: align:once\ndescription: test\n---\n',
+      )
+
+      const ctx = makeContext({
+        scope: 'project',
+        state: {
+          version: 2,
+          current: {
+            project: { installs: ['align_once'] },
+          },
+          history: {},
+        },
+        projectLibraryDir: path.join(dir, '.claude', 'skills-library'),
+        projectOutfitDir: path.join(dir, '.claude', 'skills'),
+      })
+
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toHaveLength(1)
+
+      const fixResult = await run(findings[0]!.fix!())
+      expect(fixResult).toContain('restored symlink: align_once')
+      expect(await readlink(path.join(dir, '.claude', 'skills', 'align_once'))).toBe(skillDir)
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('new-leaf nested namespace coverage', () => {
+  const aspect = Aspects.ALL_ASPECTS.find((a) => a.name === 'new-leaf')!
+
+  test('detects and fixes nested leaves using namespace prefixes', async () => {
+    const dir = path.join(tmpBase, 'new-leaf-nested-prefix')
+    const origCwd = process.cwd()
+
+    try {
+      await mkdir(dir, { recursive: true })
+      process.chdir(dir)
+      const libraryDir = path.join(dir, '.claude', 'skills-library')
+      const redoDir = path.join(libraryDir, 'skills', 'change', 'redo')
+      const undoDir = path.join(libraryDir, 'skills', 'change', 'undo')
+      await mkdir(redoDir, { recursive: true })
+      await mkdir(undoDir, { recursive: true })
+      await writeFile(
+        path.join(redoDir, 'SKILL.md'),
+        '---\nname: skills:change:redo\ndescription: test\n---\n',
+      )
+      await writeFile(
+        path.join(undoDir, 'SKILL.md'),
+        '---\nname: skills:change:undo\ndescription: test\n---\n',
+      )
+
+      const findings = await run(
+        aspect.detect(
+          makeContext({
+            scope: 'project',
+            projectOutfit: [
+              Lib.OutfitEntry.make({
+                name: 'skills_change_redo',
+                dir: path.join(dir, '.claude', 'skills', 'skills_change_redo'),
+                commitment: 'pluggable',
+                scope: 'project',
+                symlinkTarget: redoDir,
+              }),
+            ],
+            library: [
+              {
+                colonName: 'skills:change:redo',
+                libraryRelPath: 'skills/change/redo',
+                libraryDir,
+                libraryScope: 'project',
+                frontmatter: null,
+              },
+              {
+                colonName: 'skills:change:undo',
+                libraryRelPath: 'skills/change/undo',
+                libraryDir,
+                libraryScope: 'project',
+                frontmatter: null,
+              },
+            ],
+            projectLibraryDir: libraryDir,
+            projectOutfitDir: path.join(dir, '.claude', 'skills'),
+          }),
+        ),
+      )
+
+      const finding = findings.find((candidate) => candidate.message.includes('skills:change:undo'))
+      expect(finding).toBeDefined()
+
+      const fixResult = await run(finding!.fix!())
+      expect(fixResult).toContain('skills:change:undo')
+      expect(await readlink(path.join(dir, '.claude', 'skills', 'skills_change_undo'))).toBe(
+        undoDir,
+      )
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('stale-router exact namespace matching', () => {
+  const aspect = Aspects.ALL_ASPECTS.find((a) => a.name === 'stale-router')!
+
+  test('regenerates routers from only the exact top-level namespace', async () => {
+    const dir = path.join(tmpBase, 'stale-router-exact-namespace')
+    const origCwd = process.cwd()
+
+    try {
+      await mkdir(dir, { recursive: true })
+      process.chdir(dir)
+      const libraryDir = path.join(dir, '.claude', 'skills-library')
+      const ccDir = path.join(libraryDir, 'cc', 'plugins')
+      const cccDir = path.join(libraryDir, 'ccc', 'plugins')
+      const routerDir = path.join(dir, '.claude', 'skills', 'cc')
+      await mkdir(ccDir, { recursive: true })
+      await mkdir(cccDir, { recursive: true })
+      await mkdir(routerDir, { recursive: true })
+      await writeFile(
+        path.join(ccDir, 'SKILL.md'),
+        '---\nname: cc:plugins\ndescription: test\n---\n',
+      )
+      await writeFile(
+        path.join(cccDir, 'SKILL.md'),
+        '---\nname: ccc:plugins\ndescription: test\n---\n',
+      )
+      await writeFile(path.join(routerDir, 'SKILL.md'), Lib.generateRouter('cc', []))
+
+      const findings = await run(
+        aspect.detect(
+          makeContext({
+            scope: 'project',
+            library: [
+              {
+                colonName: 'cc:plugins',
+                libraryRelPath: 'cc/plugins',
+                libraryDir,
+                libraryScope: 'project',
+                frontmatter: null,
+              },
+              {
+                colonName: 'ccc:plugins',
+                libraryRelPath: 'ccc/plugins',
+                libraryDir,
+                libraryScope: 'project',
+                frontmatter: null,
+              },
+            ],
+            projectLibraryDir: libraryDir,
+            projectOutfitDir: path.join(dir, '.claude', 'skills'),
+          }),
+        ),
+      )
+
+      expect(findings).toHaveLength(1)
+      const fixResult = await run(findings[0]!.fix!())
+      expect(fixResult).toContain('regenerated router: cc')
+
+      const content = await readFile(path.join(routerDir, 'SKILL.md'), 'utf-8')
+      expect(content).toContain('cc:plugins')
+      expect(content).not.toContain('ccc:plugins')
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
 

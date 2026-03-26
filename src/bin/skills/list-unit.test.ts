@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -66,6 +66,30 @@ describe('skillsList', () => {
     await writeFile(path.join(coreDir, 'SKILL.md'), SKILL_MD('my-core'))
 
     await run(skillsList())
+  })
+
+  test('prefers frontmatter names when rendering core skills', async () => {
+    const output: string[] = []
+    const origLog = console.log
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(' '))
+    }
+
+    try {
+      const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+      const coreDir = path.join(outfitDir, 'git_sync')
+      await mkdir(coreDir, { recursive: true })
+      await writeFile(
+        path.join(coreDir, 'SKILL.md'),
+        '---\nname: "git:sync"\ndescription: Test skill git:sync\n---\n# git:sync\n',
+      )
+
+      await run(skillsList())
+    } finally {
+      console.log = origLog
+    }
+
+    expect(output.join('\n')).toContain('Core (project):\n  ● git:sync')
   })
 
   test('shows off skills from library', async () => {

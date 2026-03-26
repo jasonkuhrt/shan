@@ -1,8 +1,19 @@
 import { describe, expect, mock, test } from 'bun:test'
 import { Effect } from 'effect'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import * as path from 'node:path'
 
-import { parseArgs, resolveScope, QUIET_ERRORS, program, run } from './shan.js'
+import {
+  parseArgs,
+  resolveScope,
+  resolveSkillsOnScope,
+  QUIET_ERRORS,
+  program,
+  run,
+} from './shan.js'
 import type { ParsedFlags } from './shan.js'
+import * as Lib from '../lib/skill-library.js'
 
 const defaultFlags: ParsedFlags = {
   raw: false,
@@ -119,6 +130,78 @@ describe('resolveScope', () => {
   })
 })
 
+describe('resolveSkillsOnScope', () => {
+  test('honors an explicit global flag', async () => {
+    await expect(
+      Effect.runPromise(resolveSkillsOnScope(makeFlags({ global: true }), 'foo')),
+    ).resolves.toBe('user')
+  })
+
+  test('honors an explicit user scope', async () => {
+    await expect(
+      Effect.runPromise(resolveSkillsOnScope(makeFlags({ scope: 'user' }), 'foo')),
+    ).resolves.toBe('user')
+  })
+
+  test('honors an explicit project scope', async () => {
+    await expect(
+      Effect.runPromise(resolveSkillsOnScope(makeFlags({ scope: 'project' }), 'foo')),
+    ).resolves.toBe('project')
+  })
+
+  test('defaults to project when no targets were provided', async () => {
+    await expect(Effect.runPromise(resolveSkillsOnScope(makeFlags({}), ''))).resolves.toBe(
+      'project',
+    )
+  })
+
+  test('resolves project scope when all targets exist in the project library', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-scope-'))
+    const origCwd = process.cwd()
+
+    try {
+      process.chdir(dir)
+      const skillDir = path.join(dir, '.claude', 'skills-library', 'projskill')
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: projskill\ndescription: Test skill\n---\n# projskill\n',
+      )
+
+      await expect(
+        Effect.runPromise(resolveSkillsOnScope(makeFlags({}), 'projskill')),
+      ).resolves.toBe('project')
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('falls back to user scope when the project library is missing and the user library has the target', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-user-scope-'))
+    const origCwd = process.cwd()
+    const skillName = `__resolve_user_scope_${Date.now()}__`
+    const skillDir = path.join(Lib.LIBRARY_DIR, skillName)
+
+    try {
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        `---\nname: ${skillName}\ndescription: Test skill\n---\n# ${skillName}\n`,
+      )
+      process.chdir(dir)
+
+      await expect(Effect.runPromise(resolveSkillsOnScope(makeFlags({}), skillName))).resolves.toBe(
+        'user',
+      )
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+      await rm(skillDir, { recursive: true, force: true })
+    }
+  })
+})
+
 // ── QUIET_ERRORS ──────────────────────────────────────
 
 describe('QUIET_ERRORS', () => {
@@ -180,6 +263,61 @@ describe('program', () => {
     await withArgv(['lint', 'bogus'], async () => {
       await expect(Effect.runPromise(program)).rejects.toThrow('Unknown command')
     })
+  })
+
+  test('lint exits cleanly when no settings files are present', async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-lint-home-'))
+    const projectDir = await mkdtemp(path.join(tmpdir(), 'shan-lint-project-'))
+    const origHome = process.env['HOME']
+    const origCwd = process.cwd()
+
+    try {
+      process.env['HOME'] = homeDir
+      process.chdir(projectDir)
+
+      await withArgv(['lint'], async () => {
+        await Effect.runPromise(program)
+      })
+    } finally {
+      process.env['HOME'] = origHome
+      process.chdir(origCwd)
+      await rm(homeDir, { recursive: true, force: true })
+      await rm(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  test('lint fails when hook findings include errors', async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-lint-home-'))
+    const projectDir = await mkdtemp(path.join(tmpdir(), 'shan-lint-project-'))
+    const origHome = process.env['HOME']
+    const origCwd = process.cwd()
+
+    try {
+      process.env['HOME'] = homeDir
+      process.chdir(projectDir)
+      await mkdir(path.join(projectDir, '.claude'), { recursive: true })
+      await writeFile(
+        path.join(projectDir, '.claude', 'settings.json'),
+        JSON.stringify({
+          hooks: {
+            Stop: [
+              {
+                hooks: [{ type: 'command', command: '.claude/hooks/foo.sh' }],
+              },
+            ],
+          },
+        }),
+      )
+
+      await withArgv(['lint'], async () => {
+        await expect(Effect.runPromise(program)).rejects.toThrow('Lint errors found')
+      })
+    } finally {
+      process.env['HOME'] = origHome
+      process.chdir(origCwd)
+      await rm(homeDir, { recursive: true, force: true })
+      await rm(projectDir, { recursive: true, force: true })
+    }
   })
 
   test('unknown namespace fails', async () => {

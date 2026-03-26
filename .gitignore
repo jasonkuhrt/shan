@@ -3,6 +3,7 @@
 
 # Tools
 .dprint/
+.tmp/
 tsconfig.build.tsbuildinfo
 
 # Dependencies

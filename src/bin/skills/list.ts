@@ -7,6 +7,7 @@
 
 import { Console, Effect } from 'effect'
 import * as Lib from '../../lib/skill-library.js'
+import * as SkillName from '../../lib/skill-name.js'
 
 const DEFAULT_CHAR_BUDGET = 16_000
 
@@ -53,16 +54,31 @@ export const skillsList = () =>
       return !allOnNames.has(flatName)
     })
 
-    // Resolve pluggable entries to grid items with token detail
-    const toGridItems = (entries: typeof userPluggable) =>
+    const readDisplayName = (skillDir: string, fallbackName: string) =>
+      Effect.gen(function* () {
+        const fm = yield* Lib.readFrontmatter(skillDir)
+        return fm?.name ?? fallbackName
+      })
+
+    // Resolve outfit entries to display items, preferring frontmatter names everywhere.
+    const toGridItems = (
+      entries: ReadonlyArray<(typeof userOutfit)[number]>,
+      options?: { readonly includeDetail?: boolean },
+    ) =>
       Effect.gen(function* () {
         const items: GridItem[] = []
         for (const entry of entries) {
           const targetDir = entry.symlinkTarget ?? entry.dir
+          const name = yield* readDisplayName(targetDir, entry.name)
           const fm = yield* Lib.readFrontmatter(targetDir)
-          const chars = fm && !fm.disableModelInvocation ? Lib.estimateCharCost(fm) : 0
-          const colonName = fm?.name ?? entry.name
-          items.push({ name: colonName, detail: chars > 0 ? String(chars) : '--' })
+          const chars =
+            options?.includeDetail && fm && !fm.disableModelInvocation
+              ? Lib.estimateCharCost(fm)
+              : 0
+          items.push({
+            name,
+            ...(options?.includeDetail ? { detail: chars > 0 ? String(chars) : '--' } : {}),
+          })
         }
         return items
       })
@@ -70,28 +86,28 @@ export const skillsList = () =>
     // Core (user)
     if (userCore.length > 0) {
       yield* Console.log('Core (user):')
-      yield* printGrid(userCore.map((e) => ({ name: e.name })))
+      yield* printGrid(yield* toGridItems(userCore))
       yield* Console.log('')
     }
 
     // Core (project)
     if (projectCore.length > 0) {
       yield* Console.log('Core (project):')
-      yield* printGrid(projectCore.map((e) => ({ name: e.name })))
+      yield* printGrid(yield* toGridItems(projectCore))
       yield* Console.log('')
     }
 
     // On (user)
     if (userPluggable.length > 0) {
       yield* Console.log('On (user):')
-      yield* printGrid(yield* toGridItems(userPluggable))
+      yield* printGrid(yield* toGridItems(userPluggable, { includeDetail: true }))
       yield* Console.log('')
     }
 
     // On (project)
     if (projectPluggable.length > 0) {
       yield* Console.log('On (project):')
-      yield* printGrid(yield* toGridItems(projectPluggable))
+      yield* printGrid(yield* toGridItems(projectPluggable, { includeDetail: true }))
       yield* Console.log('')
     }
 
@@ -140,16 +156,15 @@ const printGrouped = (colonNames: readonly string[]) =>
   Effect.gen(function* () {
     if (colonNames.length === 0) return
 
-    // Partition into namespaced and standalone
     const groups = new Map<string, string[]>()
     const standalone: string[] = []
     for (const name of colonNames) {
-      const idx = name.indexOf(':')
-      if (idx === -1) {
+      const parsed = SkillName.parseFrontmatterName(name)
+      if (!parsed || !SkillName.isNamespaced(parsed)) {
         standalone.push(name)
       } else {
-        const ns = name.slice(0, idx)
-        const child = name.slice(idx + 1)
+        const ns = SkillName.topLevelName(parsed)
+        const child = SkillName.nestedName(parsed) ?? name
         let children = groups.get(ns)
         if (!children) {
           children = []

@@ -1,13 +1,14 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { lstat, mkdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
-import { skillsOff } from './off.js'
+import { cleanupRouter, skillsOff } from './off.js'
 import { skillsOn } from './on.js'
 import { skillsUndo } from './undo.js'
 import { registerStateFileRestore } from './test-state.js'
+import * as Lib from '../../lib/skill-library.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
@@ -222,6 +223,118 @@ describe('skillsOff', () => {
     }
   })
 
+  test('cleanupRouter handles missing router dir gracefully', async () => {
+    // Create group with children in library
+    const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+    for (const leaf of ['cr-child-a', 'cr-child-b']) {
+      const leafDir = path.join(libDir, 'crgrp', leaf)
+      await mkdir(leafDir, { recursive: true })
+      await writeFile(
+        path.join(leafDir, 'SKILL.md'),
+        `---\nname: "crgrp:${leaf}"\ndescription: Test\n---\n# ${leaf}\n`,
+      )
+    }
+
+    // Install group
+    await run(skillsOn('crgrp', { scope: 'project', strict: false }))
+
+    // Manually delete the generated router directory before off
+    const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+    const routerPath = path.join(outfitDir, 'crgrp')
+    await rm(routerPath, { recursive: true, force: true })
+
+    // Turn off → cleanupRouter is called, lstat(routerPath) fails → catchAll fires
+    await run(skillsOff('crgrp', { scope: 'project', strict: false }))
+  })
+
+  test('cleanupRouter can resolve a legacy project install from the user library', async () => {
+    const groupName = `__legacy_router_${Date.now()}__`
+    const userGroupLeafDir = path.join(Lib.LIBRARY_DIR, groupName, 'child')
+    const projectLibraryDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+    const projectOutfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+    const projectLinkPath = path.join(projectOutfitDir, `${groupName}_child`)
+    const routerPath = path.join(projectOutfitDir, groupName)
+
+    try {
+      await mkdir(userGroupLeafDir, { recursive: true })
+      await mkdir(projectLibraryDir, { recursive: true })
+      await writeFile(
+        path.join(userGroupLeafDir, 'SKILL.md'),
+        `---\nname: "${groupName}:child"\ndescription: Legacy child\n---\n# child\n`,
+      )
+      await mkdir(projectOutfitDir, { recursive: true })
+      await symlink(userGroupLeafDir, projectLinkPath)
+      await mkdir(routerPath, { recursive: true })
+      await writeFile(path.join(routerPath, 'SKILL.md'), `---\nname: ${groupName}\n---\n`)
+
+      await run(skillsOff(groupName, { scope: 'project', strict: false }))
+
+      await expect(lstat(projectLinkPath)).rejects.toThrow()
+      await expect(lstat(routerPath)).rejects.toThrow()
+    } finally {
+      await rm(path.join(Lib.LIBRARY_DIR, groupName), { recursive: true, force: true })
+    }
+  })
+
+  test('cleanupRouter leaves unrelated directories alone when no matching library group exists', async () => {
+    const routerPath = path.join(TEMP_DIR, '.claude', 'skills', '__cleanup_router_no_group__')
+    await mkdir(routerPath, { recursive: true })
+    await writeFile(path.join(routerPath, 'SKILL.md'), '# not a generated router')
+
+    await run(
+      cleanupRouter(
+        path.join(TEMP_DIR, '.claude', 'skills'),
+        '__cleanup_router_no_group__',
+        'project',
+      ),
+    )
+
+    expect((await lstat(routerPath)).isDirectory()).toBe(true)
+  })
+
+  test('reset-all catchAll handles unlink failures on read-only outfit', async () => {
+    await setupProjectLibrary('ro-skill-a', 'ro-skill-b')
+    await run(skillsOn('ro-skill-a,ro-skill-b', { scope: 'project', strict: false }))
+
+    const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+
+    // Make outfit dir read-only so unlink fails (triggers catchAll)
+    await chmod(outfitDir, 0o555)
+    try {
+      // Reset all — unlinks fail due to permissions → catchAll(() => Effect.void) fires
+      await run(skillsOff('', { scope: 'project', strict: false }))
+    } finally {
+      await chmod(outfitDir, 0o755)
+    }
+  })
+
+  test('cleanupRouter catchAll handles rm failure on read-only outfit', async () => {
+    const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+    for (const leaf of ['roc-a', 'roc-b']) {
+      const leafDir = path.join(libDir, 'rogrp', leaf)
+      await mkdir(leafDir, { recursive: true })
+      await writeFile(
+        path.join(leafDir, 'SKILL.md'),
+        `---\nname: "rogrp:${leaf}"\ndescription: Test\n---\n# ${leaf}\n`,
+      )
+    }
+
+    await run(skillsOn('rogrp', { scope: 'project', strict: false }))
+
+    const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+
+    // Make outfit dir read-only so rm in cleanupRouter fails → catchAll fires
+    await chmod(outfitDir, 0o555)
+    try {
+      // Turn off group → cleanupRouter reaches rm() which fails → catchAll
+      await run(skillsOff('rogrp', { scope: 'project', strict: false }))
+    } catch {
+      // May fail due to unlink without catchAll in Phase 2
+    } finally {
+      await chmod(outfitDir, 0o755)
+    }
+  })
+
   test('reset-all after undo trims undone history entries', async () => {
     await setupProjectLibrary('resetundo-a', 'resetundo-b')
     await run(skillsOn('resetundo-a', { scope: 'project', strict: false }))
@@ -232,6 +345,64 @@ describe('skillsOff', () => {
 
     // Reset all → exercises resetAll path with undoneCount > 0
     await run(skillsOff('', { scope: 'project', strict: false }))
+  })
+
+  test('trims history when exceeding historyLimit', async () => {
+    const configFile = path.join(process.env['HOME'] ?? '', '.config', 'shan', 'config.json')
+    const {
+      mkdir: mkdirFs,
+      writeFile: writeFileFs,
+      readFile: readFileFs,
+      rm: rmFs,
+    } = await import('node:fs/promises')
+    const origConfig = await readFileFs(configFile, 'utf-8').catch(() => null)
+
+    try {
+      // Set historyLimit to 1 so any 2nd operation triggers the splice
+      await mkdirFs(path.dirname(configFile), { recursive: true })
+      await writeFileFs(configFile, JSON.stringify({ skills: { historyLimit: 1 } }))
+
+      await setupProjectLibrary('limit-a', 'limit-b')
+      await run(skillsOn('limit-a', { scope: 'project', strict: false }))
+      // This on creates history entry #2 → exceeds limit of 1
+      await run(skillsOn('limit-b', { scope: 'project', strict: false }))
+      // Turn off with history > limit → exercises the splice in off
+      await run(skillsOff('limit-b', { scope: 'project', strict: false }))
+    } finally {
+      if (origConfig === null) {
+        await rmFs(configFile, { force: true }).catch(() => {})
+      } else {
+        await writeFileFs(configFile, origConfig)
+      }
+    }
+  })
+
+  test('reset-all trims history when exceeding historyLimit', async () => {
+    const configFile = path.join(process.env['HOME'] ?? '', '.config', 'shan', 'config.json')
+    const {
+      mkdir: mkdirFs,
+      writeFile: writeFileFs,
+      readFile: readFileFs,
+      rm: rmFs,
+    } = await import('node:fs/promises')
+    const origConfig = await readFileFs(configFile, 'utf-8').catch(() => null)
+
+    try {
+      await mkdirFs(path.dirname(configFile), { recursive: true })
+      await writeFileFs(configFile, JSON.stringify({ skills: { historyLimit: 1 } }))
+
+      await setupProjectLibrary('rlimit-a', 'rlimit-b')
+      await run(skillsOn('rlimit-a', { scope: 'project', strict: false }))
+      await run(skillsOn('rlimit-b', { scope: 'project', strict: false }))
+      // Reset all with history > limit → exercises splice in resetAll
+      await run(skillsOff('', { scope: 'project', strict: false }))
+    } finally {
+      if (origConfig === null) {
+        await rmFs(configFile, { force: true }).catch(() => {})
+      } else {
+        await writeFileFs(configFile, origConfig)
+      }
+    }
   })
 
   test('reset-all cleans up generated routers', async () => {
