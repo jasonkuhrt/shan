@@ -33,6 +33,7 @@ export interface DoctorFinding {
 }
 
 export interface DoctorContext {
+  readonly scope: Lib.Scope
   readonly state: Lib.ShanState
   readonly library: Lib.SkillInfo[]
   readonly userOutfit: Lib.OutfitEntry[]
@@ -87,6 +88,9 @@ const getResolvedDirectory = (target: string) =>
     return resolvedLstat.isDirectory() ? resolvedTarget : null
   }).pipe(Effect.catchAll(() => Effect.succeed(null)))
 
+const scopeTargets = <T>(ctx: DoctorContext, userTarget: T, projectTarget: T): T[] =>
+  ctx.scope === 'user' ? [userTarget] : [projectTarget]
+
 const agentMirror: DoctorAspect = {
   name: 'agent-mirror',
   description: 'Configured mirror agent outfit diverges from canonical outfit',
@@ -97,7 +101,7 @@ const agentMirror: DoctorAspect = {
       const mirrorAgents = Lib.getMirrorAgents(ctx.configuredAgents)
       if (mirrorAgents.length === 0) return findings
 
-      for (const scope of ['user', 'project'] as const) {
+      for (const scope of scopeTargets(ctx, 'user' as const, 'project' as const)) {
         const canonicalDir = Lib.outfitDir(scope)
         const canonicalExists = yield* checkDirectory(canonicalDir)
         const canonicalResolved = canonicalExists ? yield* getResolvedDirectory(canonicalDir) : null
@@ -150,10 +154,11 @@ const brokenSymlink: DoctorAspect = {
   detect: (ctx) =>
     Effect.gen(function* () {
       const findings: DoctorFinding[] = []
-      for (const outfit of [
+      for (const outfit of scopeTargets(
+        ctx,
         { entries: ctx.userOutfit, label: 'user', scope: 'user' as Lib.Scope },
         { entries: ctx.projectOutfit, label: 'project', scope: 'project' as Lib.Scope },
-      ]) {
+      )) {
         for (const entry of outfit.entries) {
           if (entry.commitment !== 'pluggable') continue
           const target = entry.symlinkTarget ?? ''
@@ -253,6 +258,10 @@ const stateDrift: DoctorAspect = {
     Effect.gen(function* () {
       const findings: DoctorFinding[] = []
       for (const [scopeKey, scopeState] of Object.entries(ctx.state.current)) {
+        if (ctx.scope === 'user' && scopeKey !== 'global') continue
+        if (ctx.scope === 'project' && scopeKey !== process.cwd() && scopeKey !== 'project') {
+          continue
+        }
         const resolvedScope: Lib.Scope = scopeKey === 'global' ? 'user' : 'project'
         const outfitDir =
           scopeKey === 'global'
@@ -327,10 +336,11 @@ const orphanedRouter: DoctorAspect = {
   detect: (ctx) =>
     Effect.gen(function* () {
       const findings: DoctorFinding[] = []
-      for (const outfit of [
+      for (const outfit of scopeTargets(
+        ctx,
         { entries: ctx.userOutfit, scope: 'user' as Lib.Scope, label: 'user' },
         { entries: ctx.projectOutfit, scope: 'project' as Lib.Scope, label: 'project' },
-      ]) {
+      )) {
         const routers = yield* Lib.detectGeneratedRouters(outfit.scope)
         for (const router of routers) {
           const prefix = router + '_'
@@ -365,6 +375,7 @@ const staleGitignore: DoctorAspect = {
   level: 'info',
   detect: (ctx) =>
     Effect.gen(function* () {
+      if (ctx.scope !== 'project') return []
       const findings: DoctorFinding[] = []
       const projectPluggableNames = new Set(
         ctx.projectOutfit.filter((e) => e.commitment === 'pluggable').map((e) => e.name),
@@ -460,7 +471,7 @@ const frontmatterMismatch: DoctorAspect = {
       const findings: DoctorFinding[] = []
       const census = buildNamespaceCensus(ctx.library)
 
-      for (const skill of ctx.library) {
+      for (const skill of ctx.library.filter((candidate) => candidate.libraryScope === ctx.scope)) {
         if (!skill.frontmatter) {
           findings.push(
             finding(
@@ -597,7 +608,7 @@ const nameConflict: DoctorAspect = {
         ctx.projectOutfit.filter((e) => e.commitment === 'core').map((e) => e.name),
       )
 
-      for (const skill of ctx.library) {
+      for (const skill of ctx.library.filter((candidate) => candidate.libraryScope === ctx.scope)) {
         const flat = Lib.flattenName(skill.libraryRelPath)
         if (userCoreNames.has(flat)) {
           findings.push(
@@ -632,7 +643,7 @@ const duplicateName: DoctorAspect = {
     Effect.sync(() => {
       const findings: DoctorFinding[] = []
       const flatNames = new Map<string, string[]>()
-      for (const skill of ctx.library) {
+      for (const skill of ctx.library.filter((candidate) => candidate.libraryScope === ctx.scope)) {
         const flat = Lib.flattenName(skill.libraryRelPath)
         const existing = flatNames.get(flat) ?? []
         existing.push(skill.colonName)
@@ -655,6 +666,7 @@ const orphanedScope: DoctorAspect = {
   level: 'info',
   detect: (ctx) =>
     Effect.gen(function* () {
+      if (ctx.scope !== 'user') return []
       const findings: DoctorFinding[] = []
       for (const key of Object.keys(ctx.state.history)) {
         if (key === 'global') continue
@@ -686,6 +698,7 @@ const shadow: DoctorAspect = {
   level: 'info',
   detect: (ctx) =>
     Effect.gen(function* () {
+      if (ctx.scope !== 'project') return []
       const findings: DoctorFinding[] = []
       const projLibDir = Lib.projectLibraryDir()
       const projLibExists = yield* Effect.tryPromise(async () => {
@@ -720,6 +733,7 @@ const staleShadow: DoctorAspect = {
   level: 'warning',
   detect: (ctx) =>
     Effect.gen(function* () {
+      if (ctx.scope !== 'project') return []
       const findings: DoctorFinding[] = []
       const projLibDir = Lib.projectLibraryDir()
 
@@ -763,50 +777,54 @@ const crossScopeInstall: DoctorAspect = {
       const findings: DoctorFinding[] = []
 
       // Check user outfit → should only point into user library
-      for (const entry of ctx.userOutfit) {
-        if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
-        if (entry.symlinkTarget.startsWith(Lib.LIBRARY_DIR)) continue // correct: user → user library
-        if (entry.symlinkTarget.includes('.claude/skills-library/')) {
-          const linkPath = path.join(Lib.outfitDir('user'), entry.name)
-          findings.push(
-            finding(
-              'cross-scope-install',
-              'error',
-              `[user] ${entry.name} → ${entry.symlinkTarget}`,
-              true,
-              () =>
-                Effect.gen(function* () {
-                  yield* Effect.tryPromise(() => unlink(linkPath)).pipe(
-                    Effect.catchAll(() => Effect.void),
-                  )
-                  return `removed cross-scope symlink: ${entry.name}`
-                }),
-            ),
-          )
+      if (ctx.scope === 'user') {
+        for (const entry of ctx.userOutfit) {
+          if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
+          if (entry.symlinkTarget.startsWith(Lib.LIBRARY_DIR)) continue // correct: user → user library
+          if (entry.symlinkTarget.includes('.claude/skills-library/')) {
+            const linkPath = path.join(Lib.outfitDir('user'), entry.name)
+            findings.push(
+              finding(
+                'cross-scope-install',
+                'error',
+                `[user] ${entry.name} → ${entry.symlinkTarget}`,
+                true,
+                () =>
+                  Effect.gen(function* () {
+                    yield* Effect.tryPromise(() => unlink(linkPath)).pipe(
+                      Effect.catchAll(() => Effect.void),
+                    )
+                    return `removed cross-scope symlink: ${entry.name}`
+                  }),
+              ),
+            )
+          }
         }
       }
 
       // Check project outfit → should only point into project library
-      for (const entry of ctx.projectOutfit) {
-        if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
-        // If symlink points into user library, it's a cross-scope install
-        if (entry.symlinkTarget.startsWith(Lib.LIBRARY_DIR)) {
-          const linkPath = path.join(ctx.projectOutfitDir, entry.name)
-          findings.push(
-            finding(
-              'cross-scope-install',
-              'error',
-              `[project] ${entry.name} → ${entry.symlinkTarget}`,
-              true,
-              () =>
-                Effect.gen(function* () {
-                  yield* Effect.tryPromise(() => unlink(linkPath)).pipe(
-                    Effect.catchAll(() => Effect.void),
-                  )
-                  return `removed cross-scope symlink: ${entry.name} (project → user library)`
-                }),
-            ),
-          )
+      if (ctx.scope === 'project') {
+        for (const entry of ctx.projectOutfit) {
+          if (entry.commitment !== 'pluggable' || !entry.symlinkTarget) continue
+          // If symlink points into user library, it's a cross-scope install
+          if (entry.symlinkTarget.startsWith(Lib.LIBRARY_DIR)) {
+            const linkPath = path.join(ctx.projectOutfitDir, entry.name)
+            findings.push(
+              finding(
+                'cross-scope-install',
+                'error',
+                `[project] ${entry.name} → ${entry.symlinkTarget}`,
+                true,
+                () =>
+                  Effect.gen(function* () {
+                    yield* Effect.tryPromise(() => unlink(linkPath)).pipe(
+                      Effect.catchAll(() => Effect.void),
+                    )
+                    return `removed cross-scope symlink: ${entry.name} (project → user library)`
+                  }),
+              ),
+            )
+          }
         }
       }
 
@@ -821,10 +839,11 @@ const newLeaf: DoctorAspect = {
   detect: (ctx) =>
     Effect.sync(() => {
       const findings: DoctorFinding[] = []
-      for (const outfit of [
+      for (const outfit of scopeTargets(
+        ctx,
         { entries: ctx.userOutfit, scope: 'user' as Lib.Scope, label: 'user' },
         { entries: ctx.projectOutfit, scope: 'project' as Lib.Scope, label: 'project' },
-      ]) {
+      )) {
         // Find all installed group prefixes
         const installedNames = new Set(
           outfit.entries.filter((e) => e.commitment === 'pluggable').map((e) => e.name),
@@ -883,10 +902,11 @@ const staleRouter: DoctorAspect = {
   detect: (ctx) =>
     Effect.gen(function* () {
       const findings: DoctorFinding[] = []
-      for (const outfit of [
+      for (const outfit of scopeTargets(
+        ctx,
         { scope: 'user' as Lib.Scope, label: 'user' },
         { scope: 'project' as Lib.Scope, label: 'project' },
-      ]) {
+      )) {
         const routers = yield* Lib.detectGeneratedRouters(outfit.scope)
         for (const routerName of routers) {
           const routerDir = path.join(Lib.outfitDir(outfit.scope), routerName)

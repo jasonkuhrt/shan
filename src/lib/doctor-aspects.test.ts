@@ -17,9 +17,25 @@ const makeConfig = (agents: 'auto' | Lib.Agent[] = ['claude']): Lib.ShanConfig =
   },
 })
 
+const inferScope = (overrides: Partial<Aspects.DoctorContext>): Lib.Scope => {
+  if (overrides.scope) return overrides.scope
+  if ((overrides.projectOutfit?.length ?? 0) > 0) return 'project'
+  if ((overrides.gitignoreEntries?.length ?? 0) > 0) return 'project'
+  if (overrides.library?.some((skill) => skill.libraryScope === 'project')) return 'project'
+
+  const currentKeys = Object.keys(overrides.state?.current ?? {})
+  const historyKeys = Object.keys(overrides.state?.history ?? {})
+  if (currentKeys.some((key) => key !== 'global') || historyKeys.some((key) => key !== 'global')) {
+    return 'project'
+  }
+
+  return 'user'
+}
+
 // ── Helper: create a minimal DoctorContext ────────────────────────
 
 const makeContext = (overrides: Partial<Aspects.DoctorContext> = {}): Aspects.DoctorContext => ({
+  scope: inferScope(overrides),
   state: { version: 2, current: {}, history: {} },
   library: [],
   userOutfit: [],
@@ -69,6 +85,7 @@ describe('agent-mirror aspect', () => {
       const findings = await run(
         aspect.detect(
           makeContext({
+            scope: 'project',
             config: makeConfig(['claude', 'codex']),
             configuredAgents: ['claude', 'codex'],
             projectOutfitDir: path.join(dir, '.claude', 'skills'),
@@ -101,6 +118,7 @@ describe('agent-mirror aspect', () => {
       const findings = await run(
         aspect.detect(
           makeContext({
+            scope: 'project',
             config: makeConfig(['claude', 'codex']),
             configuredAgents: ['claude', 'codex'],
             projectOutfitDir: path.join(dir, '.claude', 'skills'),
@@ -136,6 +154,7 @@ describe('agent-mirror aspect', () => {
       const findings = await run(
         aspect.detect(
           makeContext({
+            scope: 'project',
             config: makeConfig(['claude', 'codex']),
             configuredAgents: ['claude', 'codex'],
             projectOutfitDir: path.join(dir, '.claude', 'skills'),
@@ -177,6 +196,7 @@ describe('agent-mirror aspect', () => {
       const findings = await run(
         aspect.detect(
           makeContext({
+            scope: 'project',
             config: makeConfig(['claude', 'codex']),
             configuredAgents: ['claude', 'codex'],
             projectOutfitDir: path.join(dir, '.claude', 'skills'),
@@ -188,6 +208,35 @@ describe('agent-mirror aspect', () => {
         finding.message.includes('[project] codex skills'),
       )
       expect(projectFinding).toBeUndefined()
+    } finally {
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores project mirror drift during user-scope audits', async () => {
+    const dir = path.join(tmpBase, 'agent-mirror-user-scope')
+    const origCwd = process.cwd()
+
+    try {
+      await mkdir(path.join(dir, '.claude', 'skills', 'alpha'), { recursive: true })
+      await writeFile(path.join(dir, '.claude', 'skills', 'alpha', 'SKILL.md'), '# alpha')
+      process.chdir(dir)
+
+      const findings = await run(
+        aspect.detect(
+          makeContext({
+            scope: 'user',
+            config: makeConfig(['claude', 'codex']),
+            configuredAgents: ['claude', 'codex'],
+            projectOutfitDir: path.join(dir, '.claude', 'skills'),
+          }),
+        ),
+      )
+
+      expect(findings.some((finding) => finding.message.includes('[project] codex skills'))).toBe(
+        false,
+      )
     } finally {
       process.chdir(origCwd)
       await rm(dir, { recursive: true, force: true })
@@ -831,12 +880,13 @@ describe('name-conflict aspect', () => {
 
   test('detects collision with project core skill', async () => {
     const ctx = makeContext({
+      scope: 'project',
       library: [
         {
           colonName: 'conflict',
           libraryRelPath: 'conflict',
           libraryDir: '/lib',
-          libraryScope: 'user',
+          libraryScope: 'project',
           frontmatter: { name: 'conflict', description: 'desc' },
         },
       ],
@@ -885,12 +935,13 @@ describe('duplicate-name aspect', () => {
 
   test('detects duplicate flat names', async () => {
     const ctx = makeContext({
+      scope: 'project',
       library: [
         {
           colonName: 'a:b',
           libraryRelPath: 'a/b',
           libraryDir: '/lib1',
-          libraryScope: 'user',
+          libraryScope: 'project',
           frontmatter: null,
         },
         {
@@ -933,6 +984,7 @@ describe('orphaned-scope aspect', () => {
 
   test('detects nonexistent project path', async () => {
     const ctx = makeContext({
+      scope: 'user',
       state: {
         version: 2,
         current: {},
@@ -1051,6 +1103,7 @@ describe('cross-scope-install aspect', () => {
 
   test('detects user outfit pointing to project library', async () => {
     const ctx = makeContext({
+      scope: 'user',
       userOutfit: [
         Lib.OutfitEntry.make({
           name: 'cross',
@@ -1120,6 +1173,7 @@ describe('cross-scope-install aspect', () => {
       await symlink('/some/project/.claude/skills-library/cross', path.join(dir, 'cross'))
 
       const ctx = makeContext({
+        scope: 'user',
         userOutfit: [
           Lib.OutfitEntry.make({
             name: 'cross',
@@ -1328,6 +1382,7 @@ describe('orphaned-scope fix', () => {
 
   test('fix prunes scope from state', async () => {
     const ctx = makeContext({
+      scope: 'user',
       state: {
         version: 2,
         current: {},
@@ -1418,6 +1473,7 @@ describe('state-drift with project scope', () => {
 
   test('detects missing symlink for project scope', async () => {
     const ctx = makeContext({
+      scope: 'project',
       state: {
         version: 2,
         current: {
@@ -1432,8 +1488,9 @@ describe('state-drift with project scope', () => {
   })
 
   test('handles custom project path key', async () => {
-    const customPath = '/some/custom/project'
+    const customPath = process.cwd()
     const ctx = makeContext({
+      scope: 'project',
       state: {
         version: 2,
         current: {
@@ -1461,6 +1518,7 @@ describe('shadow with project library', () => {
       await writeFile(path.join(projSkillDir, 'SKILL.md'), 'test')
 
       const ctx = makeContext({
+        scope: 'project',
         library: [
           {
             colonName: '__shadow_detect_test__',
@@ -1540,6 +1598,7 @@ describe('state-drift fix execution', () => {
 
   test('fix handles project scope key', async () => {
     const ctx = makeContext({
+      scope: 'project',
       state: {
         version: 2,
         current: {
@@ -1648,6 +1707,7 @@ describe('orphaned-scope fix execution', () => {
 
   test('fix prunes scope from state', async () => {
     const ctx = makeContext({
+      scope: 'user',
       state: {
         version: 2,
         current: { '/nonexistent/prunable': { installs: [] } },
@@ -1675,6 +1735,7 @@ describe('cross-scope-install fix execution', () => {
       await symlink('/some/project/.claude/skills-library/__test_cross_scope__', linkPath)
 
       const ctx = makeContext({
+        scope: 'user',
         userOutfit: [
           Lib.OutfitEntry.make({
             name: '__test_cross_scope__',

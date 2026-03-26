@@ -1,10 +1,10 @@
-import { afterAll, beforeEach, describe, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
-import { skillsDoctor } from './doctor.js'
+import { collectDoctorFindings, skillsDoctor } from './doctor.js'
 import { skillsOn } from './on.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
@@ -83,5 +83,36 @@ describe('skillsDoctor', () => {
     await symlink('/nonexistent/path', path.join(outfitDir, 'broken-fix'))
 
     await run(skillsDoctor({ noFix: false }))
+  })
+
+  test('scope=user ignores project-only doctor findings', async () => {
+    await setupProjectLibrary('doctor-skill')
+    await writeFile(
+      path.join(TEMP_DIR, '.gitignore'),
+      [
+        '# shan-managed (do not edit)',
+        '.claude/skills/missing-skill',
+        '# end shan-managed',
+        '',
+      ].join('\n'),
+    )
+
+    const projectResult = await run(collectDoctorFindings('project'))
+    expect(projectResult).not.toBeNull()
+    if (!projectResult) throw new Error('expected project doctor findings')
+    expect(
+      projectResult.findings.some((finding) =>
+        finding.message.includes('.claude/skills/missing-skill'),
+      ),
+    ).toBe(true)
+
+    const userResult = await run(collectDoctorFindings('user'))
+    expect(userResult).not.toBeNull()
+    if (!userResult) throw new Error('expected user doctor findings')
+    expect(
+      userResult.findings.some((finding) =>
+        finding.message.includes('.claude/skills/missing-skill'),
+      ),
+    ).toBe(false)
   })
 })

@@ -238,7 +238,7 @@ export const program = Effect.gen(function* () {
     } else if (command === 'redo') {
       yield* skillsRedo(Number(positional[0]) || 1, scope)
     } else if (command === 'doctor') {
-      yield* skillsDoctor({ noFix: flags.noFix })
+      yield* skillsDoctor({ noFix: flags.noFix, scope })
     } else if (command === 'migrate') {
       yield* skillsMigrate({ execute: flags.execute })
     } else if (command === 'create') {

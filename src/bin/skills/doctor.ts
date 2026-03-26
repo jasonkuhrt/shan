@@ -6,34 +6,32 @@
 
 import { Console, Effect } from 'effect'
 import * as Lib from '../../lib/skill-library.js'
-import { ALL_ASPECTS, type DoctorContext, type DoctorFinding } from '../../lib/doctor-aspects.js'
+import { ALL_ASPECTS, type DoctorFinding } from '../../lib/doctor-aspects.js'
 
 export interface DoctorOptions {
   readonly noFix: boolean
+  readonly scope?: Lib.Scope
 }
 
-export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
+export const createDoctorContext = (scope: Lib.Scope) =>
   Effect.gen(function* () {
-    yield* Console.log('Running health checks...')
-    yield* Console.log('')
-
-    // ── Check: Library exists ──────────────────────────────────────
     const libExists = yield* Lib.libraryExists()
-    if (!libExists) {
-      yield* Console.error(`Library directory not found: ${Lib.LIBRARY_DIR}`)
-      return
-    }
+    if (!libExists) return null
 
-    // ── Build context ─────────────────────────────────────────────
     const state = yield* Lib.loadState()
-    const library = yield* Lib.listLibrary()
-    const userOutfit = yield* Lib.listOutfit('user')
-    const projectOutfit = yield* Lib.listOutfit('project')
-    const gitignoreEntries = yield* Lib.readGitignoreEntries(process.cwd())
+    const library =
+      scope === 'user'
+        ? yield* Lib.listLibrary([Lib.LIBRARY_DIR])
+        : yield* Lib.listLibrary([Lib.LIBRARY_DIR, Lib.projectLibraryDir()])
+    const userOutfit = scope === 'user' ? yield* Lib.listOutfit('user') : []
+    const projectOutfit = scope === 'project' ? yield* Lib.listOutfit('project') : []
+    const gitignoreEntries =
+      scope === 'project' ? yield* Lib.readGitignoreEntries(process.cwd()) : []
     const config = yield* Lib.loadConfig()
     const configuredAgents = yield* Lib.resolveConfiguredAgents(config)
 
-    const ctx: DoctorContext = {
+    return {
+      scope,
       state,
       library,
       userOutfit,
@@ -43,9 +41,15 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
       config,
       configuredAgents,
     }
+  })
+
+export const collectDoctorFindings = (scope: Lib.Scope) =>
+  Effect.gen(function* () {
+    const ctx = yield* createDoctorContext(scope)
+    if (!ctx) return null
 
     // ── Resolve disabled aspects ──────────────────────────────────
-    const disabled = new Set(config.skills.doctor?.disabled ?? [])
+    const disabled = new Set(ctx.config.skills.doctor?.disabled ?? [])
     const aspects = ALL_ASPECTS.filter((a) => !disabled.has(a.name))
 
     // ── Run detection ─────────────────────────────────────────────
@@ -54,6 +58,24 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
       const findings = yield* aspect.detect(ctx)
       allFindings.push(...findings)
     }
+
+    return { ctx, findings: allFindings }
+  })
+
+export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
+  Effect.gen(function* () {
+    const scope = options.scope ?? 'project'
+
+    yield* Console.log('Running health checks...')
+    yield* Console.log('')
+
+    const result = yield* collectDoctorFindings(scope)
+    if (!result) {
+      yield* Console.error(`Library directory not found: ${Lib.LIBRARY_DIR}`)
+      return
+    }
+
+    const { ctx, findings: allFindings } = result
 
     if (allFindings.length === 0) {
       yield* Console.log('doctor: 0 issues — all clear')
@@ -102,21 +124,20 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
       // Record doctor history entry — reload state since fixes may have modified it
       if (fixedCount > 0) {
         const freshState = yield* Lib.loadState()
-        const history = Lib.getProjectHistory(freshState, 'project')
+        const history = Lib.getProjectHistory(freshState, scope)
         history.entries.push(
           Lib.DoctorOp({
             targets: fixDescriptions,
-            scope: 'project',
+            scope,
             timestamp: new Date().toISOString(),
           }),
         )
-        if (history.entries.length > config.skills.historyLimit) {
-          history.entries.splice(0, history.entries.length - config.skills.historyLimit)
+        if (history.entries.length > ctx.config.skills.historyLimit) {
+          history.entries.splice(0, history.entries.length - ctx.config.skills.historyLimit)
         }
-        const newState = Lib.setProjectHistory(freshState, 'project', history)
+        const newState = Lib.setProjectHistory(freshState, scope, history)
         yield* Lib.saveState(newState)
-        yield* Lib.syncAgentMirrors('user', config)
-        yield* Lib.syncAgentMirrors('project', config)
+        yield* Lib.syncAgentMirrors(scope, ctx.config)
       }
     } else {
       // Report-only mode
