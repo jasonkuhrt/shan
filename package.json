@@ -47,7 +47,7 @@
     "build:clean": "tsgo --build --clean && rm -rf build",
     "prebuild": "bun run build:clean",
     "test": "bun test src",
-    "test:coverage": "bun test --coverage src",
+    "test:coverage": "bun test --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage src",
     "prepack": "bun run build && bun scripts/prepack-imports.ts",
     "postpack": "bun scripts/prepack-imports.ts --restore",
     "fix": "bun run fix:format && bun run fix:lint",
@@ -64,14 +64,13 @@
     "check:types:src": "tsgo",
     "check:types:docs": "bunx tsgo --project tsconfig.docs.json",
     "check:cov": "bun scripts/check-coverage.ts",
+    "check:test:cov": "bun scripts/check-staged-coverage.ts coverage/lcov.info 95",
     "check:package": "bun run build && publint run --strict",
     "check:exports": "bun run build && attw --pack . --profile esm-only",
     "check:ci": "actionlint",
     "shan": "bun src/bin/shan.ts",
     "docs:dev": "next dev",
-    "docs:build": "next build",
-    "pre-commit": "bun run check",
-    "prepare": "git config core.hooksPath hooks"
+    "docs:build": "next build"
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
@@ -92,6 +91,7 @@
     "fumadocs-core": "^16.6.17",
     "fumadocs-mdx": "^14.2.10",
     "fumadocs-ui": "^16.6.17",
+    "lint-staged": "^16.4.0",
     "next": "^16.1.6",
     "oxfmt": "^0.36.0",
     "oxlint": "^1.51.0",

@@ -162,11 +162,14 @@ The importer shells out to `skills.sh`, installs into the canonical Claude outfi
 
 ```sh
 just install          # bun install
+just hooks-install    # one-time local git hook setup
 just test             # bun test
 just check            # format + lint + types + test + coverage + package + exports + CI
 just coverage         # enforce 95% overall lines/functions coverage
 just run skills list  # run shan from repo
 ```
+
+This repo tracks its pre-commit behavior in `.git-hooks/pre-commit.d/`, so hook intent stays in the repo while installation stays local.
 
 Raw coverage table:
 

@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-bun run pre-commit
+
+exec bun run check:test:cov
