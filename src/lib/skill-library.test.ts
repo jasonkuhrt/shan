@@ -1352,6 +1352,32 @@ describe('detectGeneratedRouters', () => {
     const routers = await run(Lib.detectGeneratedRouters('project'))
     expect(Array.isArray(routers)).toBe(true)
   })
+  test('ignores real core skills that share a name with a library group', async () => {
+    const routerName = '__test_core_group_overlap__'
+    const outfitPath = Lib.outfitDir('user')
+    const routerDir = path.join(outfitPath, routerName)
+    const libDir = path.join(Lib.LIBRARY_DIR, routerName, 'child')
+
+    try {
+      await mkdir(libDir, { recursive: true })
+      await writeFile(
+        path.join(libDir, 'SKILL.md'),
+        '---\nname: "__test_core_group_overlap__:child"\ndescription: "child"\n---\nbody\n',
+      )
+      await mkdir(path.join(routerDir, 'scripts'), { recursive: true })
+      await writeFile(
+        path.join(routerDir, 'SKILL.md'),
+        '---\nname: __test_core_group_overlap__\ndescription: real core skill\n---\nbody\n',
+      )
+      await writeFile(path.join(routerDir, 'scripts', 'run.sh'), '#!/bin/sh\n')
+
+      const routers = await run(Lib.detectGeneratedRouters('user'))
+      expect(routers).not.toContain(routerName)
+    } finally {
+      await rm(path.join(Lib.LIBRARY_DIR, routerName), { recursive: true, force: true })
+      await rm(routerDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('resolveTarget (skill-library)', () => {
@@ -1435,6 +1461,8 @@ describe('restoreSnapshot', () => {
     console.error = mock(() => {})
     const outfitDir = Lib.outfitDir('project')
     const libDir = Lib.scopeLibraryDir('project')
+    const gitignorePath = path.join(process.cwd(), '.gitignore')
+    const originalGitignore = await readFile(gitignorePath, 'utf-8').catch(() => null)
     const skillName = '__restore_symlink_err__'
     const skillDir = path.join(libDir, skillName)
     try {
@@ -1450,6 +1478,8 @@ describe('restoreSnapshot', () => {
       await rm(skillDir, { recursive: true, force: true })
       // Clean up any accidentally created symlink
       await rm(path.join(outfitDir, skillName), { force: true })
+      if (originalGitignore === null) await rm(gitignorePath, { force: true })
+      else await writeFile(gitignorePath, originalGitignore)
       console.log = origLog
       console.error = origErr
     }

@@ -1473,7 +1473,9 @@ export const detectGeneratedRouters = (scope: Scope) =>
         }).pipe(Effect.catchAll(() => Effect.succeed(false)))
         if (exists) {
           const nodeType = yield* getNodeType(libraryPath)
-          if (nodeType === 'group' || nodeType === 'callable-group') {
+          const routerPath = path.join(outfitDir(scope), entry.name)
+          const isGeneratedRouter = yield* isGeneratedRouterDir(routerPath, entry.name)
+          if (isGeneratedRouter && (nodeType === 'group' || nodeType === 'callable-group')) {
             routers.push(entry.name)
             break
           }
@@ -1481,6 +1483,21 @@ export const detectGeneratedRouters = (scope: Scope) =>
       }
     }
     return routers
+  })
+
+const isGeneratedRouterDir = (routerPath: string, routerName: string) =>
+  Effect.gen(function* () {
+    const entries = yield* Effect.tryPromise(() =>
+      readdir(routerPath, { withFileTypes: true }),
+    ).pipe(Effect.catchAll(() => Effect.succeed([])))
+    const visibleEntries = entries.filter((entry) => entry.name !== '.DS_Store')
+    if (visibleEntries.length !== 1) return false
+
+    const skillMd = visibleEntries[0]
+    if (!skillMd?.isFile() || skillMd.name !== 'SKILL.md') return false
+
+    const frontmatter = yield* readFrontmatter(routerPath)
+    return frontmatter?.name === routerName && frontmatter.disableModelInvocation
   })
 
 /**

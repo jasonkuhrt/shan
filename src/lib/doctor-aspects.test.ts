@@ -2093,6 +2093,37 @@ describe('orphaned-router with real outfit', () => {
       await rm(libRouterDir, { recursive: true, force: true })
     }
   })
+
+  test('ignores real core skills that share a library namespace', async () => {
+    const outfitPath = Lib.outfitDir('user')
+    const skillName = '__test_router_core_skill__'
+    const skillDir = path.join(outfitPath, skillName)
+    const libRouterDir = path.join(Lib.LIBRARY_DIR, skillName, 'child')
+
+    try {
+      await mkdir(libRouterDir, { recursive: true })
+      await writeFile(
+        path.join(libRouterDir, 'SKILL.md'),
+        `---\nname: ${skillName}:child\ndescription: child\n---\nbody\n`,
+      )
+      await mkdir(path.join(skillDir, 'scripts'), { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        `---\nname: ${skillName}\ndescription: real core skill\n---\nbody\n`,
+      )
+      await writeFile(path.join(skillDir, 'scripts', 'run.sh'), '#!/bin/sh\n')
+
+      const outfit = await run(Lib.listOutfit('user'))
+      const ctx = makeContext({
+        userOutfit: outfit,
+      })
+      const findings = await run(aspect.detect(ctx))
+      expect(findings.find((f) => f.message.includes(skillName))).toBeUndefined()
+    } finally {
+      await rm(skillDir, { recursive: true, force: true })
+      await rm(path.join(Lib.LIBRARY_DIR, skillName), { recursive: true, force: true })
+    }
+  })
 })
 
 // ── stale-router with real outfit ─────────────────────────────────
@@ -2134,6 +2165,39 @@ describe('stale-router with real outfit', () => {
     } finally {
       await rm(routerDir, { recursive: true, force: true })
       await rm(libRouterDir, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores real core skills that share a library namespace', async () => {
+    const outfitPath = Lib.outfitDir('user')
+    const skillName = '__test_stale_router_core_skill__'
+    const skillDir = path.join(outfitPath, skillName)
+    const libRouterDir = path.join(Lib.LIBRARY_DIR, skillName, 'child')
+
+    try {
+      await mkdir(libRouterDir, { recursive: true })
+      await writeFile(
+        path.join(libRouterDir, 'SKILL.md'),
+        `---\nname: ${skillName}:child\ndescription: child\n---\nbody\n`,
+      )
+      await mkdir(path.join(skillDir, 'scripts'), { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        `---\nname: ${skillName}\ndescription: real core skill\n---\nbody\n`,
+      )
+      await writeFile(path.join(skillDir, 'scripts', 'run.sh'), '#!/bin/sh\n')
+
+      const outfit = await run(Lib.listOutfit('user'))
+      const library = await run(Lib.listLibrary())
+      const ctx = makeContext({
+        userOutfit: outfit,
+        library,
+      })
+      const findings = await run(aspect.detect(ctx))
+      expect(findings.find((f) => f.message.includes(skillName))).toBeUndefined()
+    } finally {
+      await rm(skillDir, { recursive: true, force: true })
+      await rm(path.join(Lib.LIBRARY_DIR, skillName), { recursive: true, force: true })
     }
   })
 })
