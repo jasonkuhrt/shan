@@ -45,6 +45,7 @@ export const skillsUndo = (n: number, scope: Lib.Scope) =>
     yield* Lib.syncAgentMirrors('project')
 
     yield* Console.log(`Restored outfit to ${undoCount} operation${undoCount > 1 ? 's' : ''} ago.`)
+    yield* Lib.printSlashCommandNotice
   })
 
 /** Undo a single history entry. */

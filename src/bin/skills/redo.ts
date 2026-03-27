@@ -49,6 +49,7 @@ export const skillsRedo = (n: number, scope: Lib.Scope) =>
     yield* Lib.syncAgentMirrors('project')
 
     yield* Console.log(`Redone ${redoCount} operation${redoCount > 1 ? 's' : ''}.`)
+    yield* Lib.printSlashCommandNotice
   })
 
 /** Redo a single history entry via direct filesystem replay. */

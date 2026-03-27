@@ -130,6 +130,7 @@ export const skillsMove = (
         yield* Console.log(`  uninstalled from: ${sub.scope}`)
       }
     }
+    yield* Lib.printSlashCommandNotice
   })
 
 // ── Validation ────────────────────────────────────────────────────

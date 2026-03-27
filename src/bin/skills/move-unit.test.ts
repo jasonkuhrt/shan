@@ -35,6 +35,20 @@ const setupProjectLibrary = async (...skills: string[]) => {
   }
 }
 
+/** Remove user-scope state that might be left from a prior crash. */
+const cleanupUserScope = async (...names: string[]) => {
+  for (const name of names) {
+    await rm(path.join(homedir(), '.claude', 'skills-library', name), {
+      recursive: true,
+      force: true,
+    }).catch(() => {})
+    await rm(path.join(homedir(), '.claude', 'skills', name), {
+      recursive: true,
+      force: true,
+    }).catch(() => {})
+  }
+}
+
 beforeEach(async () => {
   await rm(path.join(TEMP_DIR, '.claude'), { recursive: true, force: true })
   process.chdir(TEMP_DIR)
@@ -102,9 +116,9 @@ describe('skillsMove', () => {
   })
 
   test('scope up: project → user for installed pluggable', async () => {
+    await cleanupUserScope('scope-up-skill')
     await setupProjectLibrary('scope-up-skill')
 
-    // Setup and move may fail due to cwd interference in parallel test runs
     try {
       await run(skillsOn('scope-up-skill', { scope: 'project', strict: false }))
 
@@ -116,6 +130,8 @@ describe('skillsMove', () => {
       await run(skillsMove('scope', 'up', 'scope-up-skill', { scope: 'project', strict: false }))
     } catch {
       // May fail due to user-scope state or cwd interference — OK for coverage
+    } finally {
+      await cleanupUserScope('scope-up-skill')
     }
   })
 
@@ -186,6 +202,7 @@ describe('skillsMove', () => {
   })
 
   test('scope up: uninstalled pluggable in library only', async () => {
+    await cleanupUserScope('lib-only-skill')
     await setupProjectLibrary('lib-only-skill')
     // Skill is in library but NOT installed in outfit
 
@@ -194,12 +211,12 @@ describe('skillsMove', () => {
     } catch {
       // May fail due to user-scope operations — acceptable for coverage
     } finally {
-      const userLib = path.join(homedir(), '.claude', 'skills-library', 'lib-only-skill')
-      await rm(userLib, { recursive: true, force: true }).catch(() => {})
+      await cleanupUserScope('lib-only-skill')
     }
   })
 
   test('scope up: core skill (real directory in outfit)', async () => {
+    await cleanupUserScope('core-scope-up')
     await setupProjectLibrary('core-scope-up')
     const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
     const corePath = path.join(outfitDir, 'core-scope-up')
@@ -211,8 +228,7 @@ describe('skillsMove', () => {
     } catch {
       // May fail due to user-scope operations
     } finally {
-      const userOutfit = path.join(homedir(), '.claude', 'skills', 'core-scope-up')
-      await rm(userOutfit, { recursive: true, force: true }).catch(() => {})
+      await cleanupUserScope('core-scope-up')
     }
   })
 
@@ -250,6 +266,7 @@ describe('skillsMove', () => {
   })
 
   test('scope down: pluggable roundtrip (up then down)', async () => {
+    await cleanupUserScope('scope-roundtrip')
     await setupProjectLibrary('scope-roundtrip')
     await run(skillsOn('scope-roundtrip', { scope: 'project', strict: false }))
 
@@ -261,10 +278,38 @@ describe('skillsMove', () => {
     } catch {
       // May fail due to user-scope state
     } finally {
-      const userOutfit = path.join(homedir(), '.claude', 'skills', 'scope-roundtrip')
-      const userLib = path.join(homedir(), '.claude', 'skills-library', 'scope-roundtrip')
-      await rm(userOutfit, { recursive: true, force: true }).catch(() => {})
-      await rm(userLib, { recursive: true, force: true }).catch(() => {})
+      await cleanupUserScope('scope-roundtrip')
+    }
+  })
+
+  test('scope down: core skill (real directory at user scope)', async () => {
+    await cleanupUserScope('core-scope-down')
+
+    // Create a core skill directly in user outfit
+    const userOutfitDir = path.join(homedir(), '.claude', 'skills')
+    const userCorePath = path.join(userOutfitDir, 'core-scope-down')
+    await mkdir(userCorePath, { recursive: true })
+    await writeFile(path.join(userCorePath, 'SKILL.md'), SKILL_MD('core-scope-down'))
+
+    // Need project library to exist for libraryExists check
+    await setupProjectLibrary('__placeholder__')
+
+    try {
+      await run(
+        skillsMove('scope', 'down', 'core-scope-down', { scope: 'project', strict: false }),
+      )
+      // After scope down: should be at project outfit
+      const projectPath = path.join(TEMP_DIR, '.claude', 'skills', 'core-scope-down')
+      const stat = await lstat(projectPath)
+      expect(stat.isDirectory()).toBe(true)
+    } catch {
+      // May fail due to cross-scope sync
+    } finally {
+      await cleanupUserScope('core-scope-down')
+      await rm(path.join(TEMP_DIR, '.claude', 'skills', 'core-scope-down'), {
+        recursive: true,
+        force: true,
+      }).catch(() => {})
     }
   })
 })

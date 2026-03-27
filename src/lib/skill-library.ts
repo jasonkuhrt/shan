@@ -37,6 +37,7 @@ import {
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import * as path from 'node:path'
+import * as SkillName from './skill-name.js'
 
 // ── Paths ──────────────────────────────────────────────────────────
 
@@ -283,6 +284,50 @@ export const reportResults = (rows: readonly ResultRow[]) =>
       }
     }
   })
+
+// ── Slash-command notice ─────────────────────────────────────────
+
+const CC_ISSUE_URL = 'https://github.com/anthropics/claude-code/issues/37862'
+const SHAN_ISSUE_URL =
+  'https://github.com/jasonkuhrt/shan/issues/new?title=CC+%2337862+resolved:+remove+slash-command+notice&body=The+CC+issue+anthropics/claude-code%2337862+has+been+resolved.+The+slash-command+autocomplete+limitation+notice+in+%60shan+skills+on/off%60+output+is+now+obsolete+and+should+be+removed+in+the+next+shan+release.&labels=enhancement'
+
+const osc8 = (url: string, text: string) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`
+
+/**
+ * Print a notice explaining the slash-command autocomplete limitation
+ * after any skill outfit mutation (on/off/undo/redo/move/reset).
+ *
+ * CC hot-reloads skill files via chokidar, so the model sees changes immediately.
+ * But the slash-command parser is frozen at session start (CC bug #37862).
+ */
+export const printSlashCommandNotice = Effect.gen(function* () {
+  const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`
+  const white = (s: string) => `\x1b[1;37m${s}\x1b[0m`
+  const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`
+  const blue = (s: string) => `\x1b[34m${s}\x1b[0m`
+  const dim = (s: string) => `\x1b[2m${s}\x1b[0m`
+
+  const bar = dim('│')
+
+  const lines = [
+    '',
+    dim('  ┌──────────────────────────────────────────────────────────┐'),
+    `  ${bar}  ${cyan('ℹ')}  ${white('Skill Availability')}                                   ${bar}`,
+    dim('  ├──────────────────────────────────────────────────────────┤'),
+    `  ${bar}  ${ansi.green('●')}  Model-initiated use     ${white('available now')}             ${bar}`,
+    `  ${bar}  ${yellow('⊘')}  /slash-command autocomplete  ${yellow('next session')}          ${bar}`,
+    dim('  ├──────────────────────────────────────────────────────────┤'),
+    `  ${bar}  ${dim('The slash-command parser is frozen at session start.')}   ${bar}`,
+    `  ${bar}  ${dim('The model uses skills immediately — only the')}          ${bar}`,
+    `  ${bar}  ${dim('/autocomplete index requires a new session.')}           ${bar}`,
+    `  ${bar}                                                          ${bar}`,
+    `  ${bar}  ${blue(osc8(CC_ISSUE_URL, 'Track CC fix → anthropics/claude-code#37862'))}`,
+    `  ${bar}  ${blue(osc8(SHAN_ISSUE_URL, 'Report when fixed → remove this notice'))}`,
+    dim('  └──────────────────────────────────────────────────────────┘'),
+  ]
+
+  yield* Console.log(lines.join('\n'))
+})
 
 // ── History (Data.TaggedEnum) ─────────────────────────────────────
 
@@ -1101,16 +1146,28 @@ export class BrokenOutfitDirError extends Data.TaggedError('BrokenOutfitDirError
 // ── Name translation ───────────────────────────────────────────────
 
 /** Translate colon name to library-relative path: "ts:tooling" → "ts/tooling" */
-export const colonToPath = (colonName: string): string => colonName.replaceAll(':', '/')
+export const colonToPath = (colonName: string): string =>
+  SkillName.parseFrontmatterName(colonName)
+    ? SkillName.toLibraryRelPath(SkillName.fromFrontmatterName(colonName))
+    : colonName.replaceAll(':', '/')
 
 /** Translate library-relative path to colon name: "ts/tooling" → "ts:tooling" */
-export const pathToColon = (relPath: string): string => relPath.replaceAll('/', ':')
+export const pathToColon = (relPath: string): string =>
+  SkillName.parseLibraryRelPath(relPath)
+    ? SkillName.toFrontmatterName(SkillName.fromLibraryRelPath(relPath))
+    : relPath.replaceAll('/', ':')
 
 /** Flatten a library-relative path to a symlink name: "ts/tooling" → "ts_tooling" */
-export const flattenName = (relPath: string): string => relPath.replaceAll('/', '_')
+export const flattenName = (relPath: string): string =>
+  SkillName.parseLibraryRelPath(relPath)
+    ? SkillName.toFlatName(SkillName.fromLibraryRelPath(relPath))
+    : relPath.replaceAll('/', '_')
 
 /** Unflatten a symlink name to a library-relative path: "ts_tooling" → "ts/tooling" */
-export const unflattenName = (flatName: string): string => flatName.replaceAll('_', '/')
+export const unflattenName = (flatName: string): string =>
+  SkillName.parseFlatName(flatName)
+    ? SkillName.toLibraryRelPath(SkillName.fromFlatName(flatName))
+    : flatName
 
 // ── Frontmatter parsing ────────────────────────────────────────────
 

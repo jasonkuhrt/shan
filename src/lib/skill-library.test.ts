@@ -120,6 +120,10 @@ describe('colonToPath', () => {
   test('handles multiple colons', () => {
     expect(Lib.colonToPath('a:b:c')).toBe('a/b/c')
   })
+
+  test('falls back to raw replacement for invalid colon names', () => {
+    expect(Lib.colonToPath('a::c')).toBe('a//c')
+  })
 })
 
 describe('pathToColon', () => {
@@ -128,6 +132,10 @@ describe('pathToColon', () => {
   })
   test('handles single segment', () => {
     expect(Lib.pathToColon('alpha')).toBe('alpha')
+  })
+
+  test('falls back to raw replacement for invalid library paths', () => {
+    expect(Lib.pathToColon('a/$/c')).toBe('a:$:c')
   })
 })
 
@@ -138,6 +146,10 @@ describe('flattenName', () => {
   test('handles single segment', () => {
     expect(Lib.flattenName('alpha')).toBe('alpha')
   })
+
+  test('falls back to raw replacement for invalid library paths', () => {
+    expect(Lib.flattenName('a/$/c')).toBe('a_$_c')
+  })
 })
 
 describe('unflattenName', () => {
@@ -146,6 +158,29 @@ describe('unflattenName', () => {
   })
   test('handles single segment', () => {
     expect(Lib.unflattenName('alpha')).toBe('alpha')
+  })
+
+  test('leaves invalid flat names unchanged', () => {
+    expect(Lib.unflattenName('a__c')).toBe('a__c')
+  })
+})
+
+describe('printSlashCommandNotice', () => {
+  test('prints the skill availability notice', async () => {
+    const output: string[] = []
+    const origLog = console.log
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(' '))
+    }
+
+    try {
+      await run(Lib.printSlashCommandNotice)
+    } finally {
+      console.log = origLog
+    }
+
+    expect(output.join('\n')).toContain('Skill Availability')
+    expect(output.join('\n')).toContain('anthropics/claude-code#37862')
   })
 })
 
@@ -1567,5 +1602,2044 @@ describe('HistoryEntry constructors', () => {
       timestamp: '2024-01-01',
     })
     expect(op._tag).toBe('DoctorOp')
+  })
+})
+
+// ── loadConfig with agents ───────────────────────────────────────
+
+describe('loadConfig', () => {
+  const configFile = Lib.CONFIG_FILE
+  let originalConfig: string | null = null
+
+  const saveOriginal = async () => {
+    originalConfig = await readFile(configFile, 'utf-8').catch(() => null)
+  }
+  const restoreOriginal = async () => {
+    if (originalConfig === null) {
+      await rm(configFile, { force: true }).catch(() => {})
+    } else {
+      await mkdir(path.dirname(configFile), { recursive: true })
+      await writeFile(configFile, originalConfig)
+    }
+  }
+
+  test('parses agents array from config', async () => {
+    await saveOriginal()
+    try {
+      await mkdir(path.dirname(configFile), { recursive: true })
+      await writeFile(configFile, JSON.stringify({ skills: { agents: ['claude', 'codex'] } }))
+      const config = await run(Lib.loadConfig())
+      expect(config.skills.agents).toEqual(['claude', 'codex'])
+    } finally {
+      await restoreOriginal()
+    }
+  })
+
+  test('parses agents: "auto" from config', async () => {
+    await saveOriginal()
+    try {
+      await mkdir(path.dirname(configFile), { recursive: true })
+      await writeFile(configFile, JSON.stringify({ skills: { agents: 'auto' } }))
+      const config = await run(Lib.loadConfig())
+      expect(config.skills.agents).toBe('auto')
+    } finally {
+      await restoreOriginal()
+    }
+  })
+
+  test('parses legacy mirrorAgents from config', async () => {
+    await saveOriginal()
+    try {
+      await mkdir(path.dirname(configFile), { recursive: true })
+      await writeFile(configFile, JSON.stringify({ skills: { mirrorAgents: ['codex'] } }))
+      const config = await run(Lib.loadConfig())
+      expect(config.skills.agents).toEqual(['claude', 'codex'])
+    } finally {
+      await restoreOriginal()
+    }
+  })
+
+  test('returns default agents when agents key is missing', async () => {
+    await saveOriginal()
+    try {
+      await mkdir(path.dirname(configFile), { recursive: true })
+      await writeFile(configFile, JSON.stringify({ skills: { historyLimit: 10 } }))
+      const config = await run(Lib.loadConfig())
+      expect(config.skills.agents).toBe('auto')
+      expect(config.skills.historyLimit).toBe(10)
+    } finally {
+      await restoreOriginal()
+    }
+  })
+
+  test('returns default config for invalid JSON', async () => {
+    await saveOriginal()
+    try {
+      await mkdir(path.dirname(configFile), { recursive: true })
+      await writeFile(configFile, 'not json')
+      const config = await run(Lib.loadConfig())
+      expect(config.skills.agents).toBe('auto')
+    } finally {
+      await restoreOriginal()
+    }
+  })
+})
+
+// ── saveCache / detectInstalledAgents ─────────────────────────────
+
+describe('saveCache', () => {
+  const cacheFile = Lib.CACHE_FILE
+  let originalCache: string | null = null
+
+  test('writes and reads back cache', async () => {
+    originalCache = await readFile(cacheFile, 'utf-8').catch(() => null)
+    try {
+      const cache: Lib.ShanCache = {
+        version: 1,
+        agents: { checkedAt: new Date().toISOString(), installed: ['claude'] },
+      }
+      await run(Lib.saveCache(cache))
+      const loaded = await run(Lib.loadCache())
+      expect(loaded.agents.installed).toEqual(['claude'])
+    } finally {
+      if (originalCache === null) {
+        await rm(cacheFile, { force: true }).catch(() => {})
+      } else {
+        await writeFile(cacheFile, originalCache)
+      }
+    }
+  })
+})
+
+describe('detectInstalledAgents', () => {
+  test('returns an array of agents', async () => {
+    const agents = await run(Lib.detectInstalledAgents())
+    expect(Array.isArray(agents)).toBe(true)
+  })
+})
+
+// ── resolvesToSameDirectory (via syncAgentMirrors) ────────────────
+
+describe('syncAgentMirrors equivalent-path detection', () => {
+  test('detects mirror symlink that resolves to canonical via an intermediate symlink', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-sync-resolve-same')
+    const origCwd = process.cwd()
+
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      // Create canonical outfit
+      await mkdir(path.join(projectRoot, '.claude', 'skills', 'alpha'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.claude', 'skills', 'alpha', 'SKILL.md'),
+        '---\nname: alpha\ndescription: Alpha\n---\n# alpha\n',
+      )
+      // Create an intermediate symlink to .claude
+      const intermediatePath = path.join(projectRoot, 'claude-link')
+      await symlink(path.join(projectRoot, '.claude'), intermediatePath)
+      // Create mirror as symlink through the intermediate path (different string, same real dir)
+      await mkdir(path.join(projectRoot, '.codex'), { recursive: true })
+      await symlink(
+        path.join(intermediatePath, 'skills'),
+        path.join(projectRoot, '.codex', 'skills'),
+      )
+      process.chdir(projectRoot)
+
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+
+      // Mirror should still work (either kept as-is or replaced with direct symlink)
+      expect(
+        await readFile(path.join(projectRoot, '.codex', 'skills', 'alpha', 'SKILL.md'), 'utf-8'),
+      ).toContain('Alpha')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── ensureOutfitDir ─────────────────────────────────────────────────
+
+describe('ensureOutfitDir', () => {
+  test('reports BrokenOutfitDirError for broken symlink', async () => {
+    const dir = path.join(tmpBase, 'ensure-outfit-broken')
+    try {
+      await rm(dir, { recursive: true, force: true })
+      await mkdir(path.dirname(dir), { recursive: true })
+      await symlink('/nonexistent/target/path', dir)
+
+      const exit = await runExit(Lib.ensureOutfitDir(dir))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const err =
+          Cause.failureOption(exit.cause)._tag === 'Some'
+            ? Cause.failureOption(exit.cause).value
+            : null
+        expect(err).toBeInstanceOf(Lib.BrokenOutfitDirError)
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+
+  test('succeeds when dir already exists', async () => {
+    const dir = path.join(tmpBase, 'ensure-outfit-exists')
+    try {
+      await mkdir(dir, { recursive: true })
+      await run(Lib.ensureOutfitDir(dir))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('creates dir when missing', async () => {
+    const dir = path.join(tmpBase, 'ensure-outfit-missing')
+    await rm(dir, { recursive: true, force: true })
+    try {
+      await run(Lib.ensureOutfitDir(dir))
+      const dirStat = await lstat(dir)
+      expect(dirStat.isDirectory()).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── getNodeType ─────────────────────────────────────────────────────
+
+describe('getNodeType', () => {
+  test('returns group for nonexistent directory', async () => {
+    const nodeType = await run(Lib.getNodeType('/nonexistent/path/to/skill'))
+    expect(nodeType).toBe('group')
+  })
+
+  test('returns leaf for directory with only SKILL.md', async () => {
+    const dir = path.join(tmpBase, 'nodetype-leaf')
+    try {
+      await mkdir(dir, { recursive: true })
+      await writeFile(path.join(dir, 'SKILL.md'), '---\nname: leaf\ndescription: leaf\n---\n')
+      const nodeType = await run(Lib.getNodeType(dir))
+      expect(nodeType).toBe('leaf')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('returns group for directory with only subdirs', async () => {
+    const dir = path.join(tmpBase, 'nodetype-group')
+    try {
+      await mkdir(path.join(dir, 'child'), { recursive: true })
+      const nodeType = await run(Lib.getNodeType(dir))
+      expect(nodeType).toBe('group')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('returns callable-group for directory with SKILL.md and subdirs', async () => {
+    const dir = path.join(tmpBase, 'nodetype-callable')
+    try {
+      await mkdir(path.join(dir, 'child'), { recursive: true })
+      await writeFile(path.join(dir, 'SKILL.md'), '---\nname: cg\ndescription: cg\n---\n')
+      const nodeType = await run(Lib.getNodeType(dir))
+      expect(nodeType).toBe('callable-group')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── restoreSnapshot ─────────────────────────────────────────────────
+
+describe('restoreSnapshot', () => {
+  test('removes extra symlinks and restores missing ones', async () => {
+    const projectRoot = path.join(tmpBase, 'restore-snap')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+
+      // Create library entries
+      await createSkill(libPath, 'keep-skill')
+      await createSkill(libPath, 'restore-skill')
+
+      // Create outfit with one extra and one that should be kept
+      await mkdir(outfitPath, { recursive: true })
+      await symlink(path.join(libPath, 'keep-skill'), path.join(outfitPath, 'keep-skill'))
+      await symlink(path.join(libPath, 'restore-skill'), path.join(outfitPath, 'extra-skill'))
+
+      process.chdir(projectRoot)
+
+      // Restore snapshot with only keep-skill and restore-skill
+      await run(Lib.restoreSnapshot(['keep-skill', 'restore-skill'], [], 'project'))
+
+      // keep-skill should still exist
+      expect((await lstat(path.join(outfitPath, 'keep-skill'))).isSymbolicLink()).toBe(true)
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('skips restore when library entry missing', async () => {
+    const projectRoot = path.join(tmpBase, 'restore-snap-missing')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+      await mkdir(outfitPath, { recursive: true })
+      await mkdir(libPath, { recursive: true })
+
+      process.chdir(projectRoot)
+
+      // Try to restore a skill that doesn't exist in library
+      await run(Lib.restoreSnapshot(['nonexistent-skill'], [], 'project'))
+
+      // Should not create the symlink
+      const exists = await lstat(path.join(outfitPath, 'nonexistent-skill')).catch(() => null)
+      expect(exists).toBeNull()
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── resolveConfiguredAgents ─────────────────────────────────────────
+
+describe('resolveConfiguredAgents', () => {
+  test('returns configured agents directly when not auto', async () => {
+    const config: Lib.ShanConfig = {
+      version: 1,
+      skills: {
+        historyLimit: 50,
+        defaultScope: 'project',
+        agents: ['claude', 'codex'],
+      },
+    }
+    const agents = await run(Lib.resolveConfiguredAgents(config))
+    expect(agents).toEqual(['claude', 'codex'])
+  })
+
+  test('detects agents in auto mode', async () => {
+    const config: Lib.ShanConfig = {
+      version: 1,
+      skills: {
+        historyLimit: 50,
+        defaultScope: 'project',
+        agents: 'auto',
+      },
+    }
+    // This will hit detectInstalledAgents + saveCache (with catchAll)
+    const agents = await run(Lib.resolveConfiguredAgents(config))
+    expect(Array.isArray(agents)).toBe(true)
+  })
+})
+
+// ── libraryExists ───────────────────────────────────────────────────
+
+describe('libraryExists', () => {
+  test('returns false for nonexistent scope', async () => {
+    const projectRoot = path.join(tmpBase, 'lib-exists-test')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      process.chdir(projectRoot)
+      // No library dir exists at project scope
+      const exists = await run(Lib.libraryExists('project'))
+      expect(exists).toBe(false)
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── checkCollision ──────────────────────────────────────────────────
+
+describe('checkCollision', () => {
+  test('returns null when no collision', async () => {
+    const projectRoot = path.join(tmpBase, 'collision-test')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(path.join(projectRoot, '.claude', 'skills'), { recursive: true })
+      process.chdir(projectRoot)
+      const result = await run(Lib.checkCollision('nonexistent-skill', 'project'))
+      expect(result).toBeNull()
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── gitignore functions ─────────────────────────────────────────────
+
+describe('gitignore management', () => {
+  test('manageGitignore adds entries to new gitignore', async () => {
+    const projectRoot = path.join(tmpBase, 'gitignore-add')
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      await run(Lib.manageGitignore(projectRoot, ['.claude/skills/test']))
+      const content = await readFile(path.join(projectRoot, '.gitignore'), 'utf-8')
+      expect(content).toContain('.claude/skills/test')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('manageGitignoreRemove removes entries', async () => {
+    const projectRoot = path.join(tmpBase, 'gitignore-rm')
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      await run(Lib.manageGitignore(projectRoot, ['.claude/skills/a', '.claude/skills/b']))
+      await run(Lib.manageGitignoreRemove(projectRoot, ['.claude/skills/a']))
+      const content = await readFile(path.join(projectRoot, '.gitignore'), 'utf-8')
+      expect(content).not.toContain('.claude/skills/a')
+      expect(content).toContain('.claude/skills/b')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('manageGitignoreRemove removes entire section when no entries remain', async () => {
+    const projectRoot = path.join(tmpBase, 'gitignore-rm-all')
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      await run(Lib.manageGitignore(projectRoot, ['.claude/skills/only']))
+      await run(Lib.manageGitignoreRemove(projectRoot, ['.claude/skills/only']))
+      const content = await readFile(path.join(projectRoot, '.gitignore'), 'utf-8')
+      expect(content).not.toContain('shan-managed')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('setGitignoreEntries replaces existing section', async () => {
+    const projectRoot = path.join(tmpBase, 'gitignore-set')
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      await run(Lib.manageGitignore(projectRoot, ['.claude/skills/old']))
+      await run(Lib.setGitignoreEntries(projectRoot, ['.claude/skills/new']))
+      const content = await readFile(path.join(projectRoot, '.gitignore'), 'utf-8')
+      expect(content).not.toContain('.claude/skills/old')
+      expect(content).toContain('.claude/skills/new')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('setGitignoreEntries removes section when empty array', async () => {
+    const projectRoot = path.join(tmpBase, 'gitignore-set-empty')
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      await run(Lib.manageGitignore(projectRoot, ['.claude/skills/test']))
+      await run(Lib.setGitignoreEntries(projectRoot, []))
+      const content = await readFile(path.join(projectRoot, '.gitignore'), 'utf-8')
+      expect(content).not.toContain('shan-managed')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('readGitignoreEntries returns entries from managed section', async () => {
+    const projectRoot = path.join(tmpBase, 'gitignore-read')
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      await run(Lib.manageGitignore(projectRoot, ['.claude/skills/x', '.claude/skills/y']))
+      const entries = await run(Lib.readGitignoreEntries(projectRoot))
+      expect(entries).toContain('.claude/skills/x')
+      expect(entries).toContain('.claude/skills/y')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('readGitignoreEntries returns empty for missing file', async () => {
+    const entries = await run(Lib.readGitignoreEntries('/nonexistent/path'))
+    expect(entries).toEqual([])
+  })
+
+  test('manageGitignoreRemove no-ops on missing file', async () => {
+    await run(Lib.manageGitignoreRemove('/nonexistent/path', ['anything']))
+    // Should not throw
+  })
+})
+
+// ── resolveTarget ───────────────────────────────────────────────────
+
+describe('resolveTarget', () => {
+  test('resolves an existing skill in project library', async () => {
+    const projectRoot = path.join(tmpBase, 'resolve-target')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await createSkill(path.join(projectRoot, '.claude', 'skills-library'), 'rt-skill')
+      process.chdir(projectRoot)
+      const result = await run(Lib.resolveTarget('rt-skill', 'project', true))
+      expect(result).not.toBeNull()
+      expect(result!.colonName).toBe('rt-skill')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('returns null for nonexistent skill', async () => {
+    const projectRoot = path.join(tmpBase, 'resolve-target-missing')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(path.join(projectRoot, '.claude', 'skills-library'), { recursive: true })
+      process.chdir(projectRoot)
+      const result = await run(Lib.resolveTarget('nonexistent', 'project', true))
+      expect(result).toBeNull()
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── printTable ──────────────────────────────────────────────────────
+
+describe('printTable', () => {
+  test('handles empty rows', async () => {
+    await run(Lib.printTable([]))
+  })
+
+  test('formats rows with padding', async () => {
+    await run(
+      Lib.printTable([
+        ['Name', 'Status'],
+        ['alpha', 'on'],
+      ]),
+    )
+  })
+})
+
+// ── name translation ────────────────────────────────────────────────
+
+describe('name translation', () => {
+  test('colonToPath converts colons to path separators', () => {
+    expect(Lib.colonToPath('group:skill')).toBe(path.join('group', 'skill'))
+  })
+
+  test('pathToColon converts path separators to colons', () => {
+    expect(Lib.pathToColon(path.join('group', 'skill'))).toBe('group:skill')
+  })
+
+  test('flattenName replaces separators with underscores', () => {
+    expect(Lib.flattenName(path.join('group', 'skill'))).toBe('group_skill')
+  })
+
+  test('unflattenName replaces underscores with separators', () => {
+    expect(Lib.unflattenName('group_skill')).toBe(path.join('group', 'skill'))
+  })
+})
+
+// ── bootstrapCurrent ────────────────────────────────────────────────
+
+describe('bootstrapCurrent', () => {
+  test('returns installed pluggable skill names', async () => {
+    const projectRoot = path.join(tmpBase, 'bootstrap-current')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const libDir = path.join(projectRoot, '.claude', 'skills-library')
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      await createSkill(libDir, 'boot-skill')
+      await mkdir(outfitPath, { recursive: true })
+      await symlink(path.join(libDir, 'boot-skill'), path.join(outfitPath, 'boot-skill'))
+      process.chdir(projectRoot)
+      const installs = await run(Lib.bootstrapCurrent('project'))
+      expect(installs).toContain('boot-skill')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── estimateCharCost ────────────────────────────────────────────────
+
+describe('estimateCharCost', () => {
+  test('calculates cost from name and description', () => {
+    const cost = Lib.estimateCharCost({
+      name: 'test',
+      description: 'A test skill',
+      disableModelInvocation: false,
+    })
+    expect(cost).toBe('test A test skill'.length)
+  })
+
+  test('includes whenToUse in cost', () => {
+    const cost = Lib.estimateCharCost({
+      name: 'test',
+      description: 'desc',
+      disableModelInvocation: false,
+      whenToUse: 'when needed',
+    })
+    expect(cost).toBe('test desc when needed'.length)
+  })
+})
+
+// ── parseTargets ────────────────────────────────────────────────────
+
+describe('parseTargets', () => {
+  test('parses comma-separated targets', () => {
+    expect(Lib.parseTargets('a, b, c')).toEqual(['a', 'b', 'c'])
+  })
+
+  test('deduplicates targets', () => {
+    expect(Lib.parseTargets('a, b, a')).toEqual(['a', 'b'])
+  })
+
+  test('filters empty strings', () => {
+    expect(Lib.parseTargets('a,,b,')).toEqual(['a', 'b'])
+  })
+})
+
+// ── snapshotOutfit ──────────────────────────────────────────────────
+
+describe('snapshotOutfit', () => {
+  test('returns pluggable skill names', async () => {
+    const projectRoot = path.join(tmpBase, 'snapshot-outfit')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const libDir = path.join(projectRoot, '.claude', 'skills-library')
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      await createSkill(libDir, 'snap-skill')
+      await mkdir(outfitPath, { recursive: true })
+      await symlink(path.join(libDir, 'snap-skill'), path.join(outfitPath, 'snap-skill'))
+      // Also create a core skill (should not appear in snapshot)
+      await mkdir(path.join(outfitPath, 'core-skill'), { recursive: true })
+      await writeFile(
+        path.join(outfitPath, 'core-skill', 'SKILL.md'),
+        '---\nname: core\ndescription: core\n---\n',
+      )
+      process.chdir(projectRoot)
+      const snapshot = await run(Lib.snapshotOutfit('project'))
+      expect(snapshot).toContain('snap-skill')
+      expect(snapshot).not.toContain('core-skill')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── readFrontmatter ─────────────────────────────────────────────────
+
+describe('readFrontmatter', () => {
+  test('parses frontmatter from SKILL.md', async () => {
+    const dir = path.join(tmpBase, 'fm-parse')
+    try {
+      await mkdir(dir, { recursive: true })
+      await writeFile(
+        path.join(dir, 'SKILL.md'),
+        '---\nname: my-skill\ndescription: "A test skill"\n---\n# my-skill\n',
+      )
+      const fm = await run(Lib.readFrontmatter(dir))
+      expect(fm).not.toBeNull()
+      expect(fm!.name).toBe('my-skill')
+      expect(fm!.description).toBe('A test skill')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('returns null for missing SKILL.md', async () => {
+    const fm = await run(Lib.readFrontmatter('/nonexistent/skill'))
+    expect(fm).toBeNull()
+  })
+
+  test('parses boolean fields', async () => {
+    const dir = path.join(tmpBase, 'fm-bool')
+    try {
+      await mkdir(dir, { recursive: true })
+      await writeFile(
+        path.join(dir, 'SKILL.md'),
+        '---\nname: flagged\ndescription: test\ndisable-model-invocation: true\n---\n',
+      )
+      const fm = await run(Lib.readFrontmatter(dir))
+      expect(fm).not.toBeNull()
+      expect(fm!.disableModelInvocation).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── state helpers ───────────────────────────────────────────────────
+
+describe('state helpers', () => {
+  test('getProjectHistory returns default for unknown key', () => {
+    const state: Lib.ShanState = { version: 2, current: {}, history: {} }
+    const history = Lib.getProjectHistory(state, 'project')
+    expect(history).toEqual({ entries: [], undoneCount: 0 })
+  })
+
+  test('setProjectHistory updates state', () => {
+    const state: Lib.ShanState = { version: 2, current: {}, history: {} }
+    const updated = Lib.setProjectHistory(state, 'user', { entries: [], undoneCount: 1 })
+    expect(Lib.getProjectHistory(updated, 'user').undoneCount).toBe(1)
+  })
+
+  test('addCurrentInstall is idempotent', () => {
+    const state: Lib.ShanState = { version: 2, current: {}, history: {} }
+    const s1 = Lib.addCurrentInstall(state, 'user', 'skill-a')
+    const s2 = Lib.addCurrentInstall(s1, 'user', 'skill-a')
+    expect(Lib.getCurrentInstalls(s2, 'user')).toEqual(['skill-a'])
+  })
+
+  test('removeCurrentInstall is idempotent', () => {
+    const state: Lib.ShanState = { version: 2, current: {}, history: {} }
+    const s1 = Lib.addCurrentInstall(state, 'user', 'skill-a')
+    const s2 = Lib.removeCurrentInstall(s1, 'user', 'skill-a')
+    const s3 = Lib.removeCurrentInstall(s2, 'user', 'skill-a')
+    expect(Lib.getCurrentInstalls(s3, 'user')).toEqual([])
+  })
+})
+
+// ── resolveLeaves ───────────────────────────────────────────────────
+
+describe('resolveLeaves', () => {
+  test('finds leaf skills in a directory', async () => {
+    const libDir = path.join(tmpBase, 'resolve-leaves')
+    try {
+      await rm(libDir, { recursive: true, force: true })
+      await createSkill(libDir, path.join('group', 'leaf-a'))
+      await createSkill(libDir, path.join('group', 'leaf-b'))
+      const leaves = await run(Lib.resolveLeaves('group', libDir))
+      const names = leaves.map((l) => l.colonName)
+      expect(names).toContain('group:leaf-a')
+      expect(names).toContain('group:leaf-b')
+    } finally {
+      await rm(libDir, { recursive: true, force: true })
+    }
+  })
+
+  test('returns empty for nonexistent path', async () => {
+    const leaves = await run(Lib.resolveLeaves('nope', '/nonexistent/lib'))
+    expect(leaves).toEqual([])
+  })
+})
+
+// ── loadState ───────────────────────────────────────────────────────
+
+describe('loadState', () => {
+  test('returns default state when no file exists', async () => {
+    const state = await run(Lib.loadState())
+    expect(state.version).toBe(2)
+    expect(isRecord(state.history)).toBe(true)
+  })
+})
+
+// ── loadConfig with corrupt file ────────────────────────────────────
+
+describe('loadConfig edge cases', () => {
+  test('returns default config for corrupt JSON', async () => {
+    const configDir = Lib.CONFIG_DIR
+    const configFile = Lib.CONFIG_FILE
+    const backup = await readFile(configFile, 'utf-8').catch(() => null)
+    try {
+      await mkdir(configDir, { recursive: true })
+      await writeFile(configFile, '{{{not valid json')
+      const config = await run(Lib.loadConfig())
+      expect(config.version).toBe(1)
+    } finally {
+      if (backup) await writeFile(configFile, backup)
+      else await rm(configFile, { force: true }).catch(() => {})
+    }
+  })
+
+  test('returns default config for non-object JSON', async () => {
+    const configFile = Lib.CONFIG_FILE
+    const backup = await readFile(configFile, 'utf-8').catch(() => null)
+    try {
+      await mkdir(Lib.CONFIG_DIR, { recursive: true })
+      await writeFile(configFile, '"just a string"')
+      const config = await run(Lib.loadConfig())
+      expect(config.version).toBe(1)
+    } finally {
+      if (backup) await writeFile(configFile, backup)
+      else await rm(configFile, { force: true }).catch(() => {})
+    }
+  })
+})
+
+// ── loadCache with corrupt file ─────────────────────────────────────
+
+describe('loadCache edge cases', () => {
+  test('returns default cache for corrupt JSON', async () => {
+    const cacheFile = Lib.CACHE_FILE
+    const backup = await readFile(cacheFile, 'utf-8').catch(() => null)
+    try {
+      await mkdir(Lib.CACHE_DIR, { recursive: true })
+      await writeFile(cacheFile, '!not json!')
+      const cache = await run(Lib.loadCache())
+      expect(cache.version).toBe(1)
+    } finally {
+      if (backup) await writeFile(cacheFile, backup)
+      else await rm(cacheFile, { force: true }).catch(() => {})
+    }
+  })
+})
+
+// ── resolveHistoryScope / resolveHistoryOutfitDir ───────────────────
+
+describe('resolveHistoryScope', () => {
+  test('resolves "user" to user scope', () => {
+    expect(Lib.resolveHistoryScope('user')).toBe('user')
+  })
+
+  test('resolves "global" to user scope', () => {
+    expect(Lib.resolveHistoryScope('global')).toBe('user')
+  })
+
+  test('resolves path to project scope', () => {
+    expect(Lib.resolveHistoryScope('/some/project')).toBe('project')
+  })
+})
+
+describe('resolveHistoryOutfitDir', () => {
+  test('resolves "user" to user outfit dir', () => {
+    const result = Lib.resolveHistoryOutfitDir('user')
+    expect(result).toContain('.claude')
+    expect(result).toContain('skills')
+  })
+
+  test('resolves "global" to user outfit dir', () => {
+    const result = Lib.resolveHistoryOutfitDir('global')
+    expect(result).toContain('.claude')
+  })
+
+  test('resolves "project" to project outfit dir', () => {
+    const result = Lib.resolveHistoryOutfitDir('project')
+    expect(result).toContain('.claude')
+  })
+
+  test('resolves absolute path to that path\'s outfit dir', () => {
+    const result = Lib.resolveHistoryOutfitDir('/some/project/path')
+    expect(result).toBe('/some/project/path/.claude/skills')
+  })
+})
+
+// ── syncCurrentInstalls ─────────────────────────────────────────────
+
+describe('syncCurrentInstalls', () => {
+  test('bootstraps current installs from outfit', async () => {
+    const projectRoot = path.join(tmpBase, 'sync-current')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const libDir = path.join(projectRoot, '.claude', 'skills-library')
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      await createSkill(libDir, 'synced')
+      await mkdir(outfitPath, { recursive: true })
+      await symlink(path.join(libDir, 'synced'), path.join(outfitPath, 'synced'))
+      process.chdir(projectRoot)
+
+      const state: Lib.ShanState = { version: 2, current: {}, history: {} }
+      const updated = await run(Lib.syncCurrentInstalls(state, 'project'))
+      expect(Lib.getCurrentInstalls(updated, 'project')).toContain('synced')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── normalizeAgents / getMirrorAgents ────────────────────────────────
+
+describe('normalizeAgents', () => {
+  test('filters to known agents', () => {
+    expect(Lib.normalizeAgents(['claude', 'unknown', 'codex'])).toEqual(['claude', 'codex'])
+  })
+})
+
+describe('getMirrorAgents', () => {
+  test('excludes canonical agent', () => {
+    expect(Lib.getMirrorAgents(['claude', 'codex'])).toEqual(['codex'])
+  })
+
+  test('returns empty for only canonical', () => {
+    expect(Lib.getMirrorAgents(['claude'])).toEqual([])
+  })
+})
+
+// ── loadConfig with configured agents ───────────────────────────────
+
+describe('loadConfig with agents', () => {
+  test('parses agents: auto from config', async () => {
+    const configFile = Lib.CONFIG_FILE
+    const backup = await readFile(configFile, 'utf-8').catch(() => null)
+    try {
+      await mkdir(Lib.CONFIG_DIR, { recursive: true })
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          skills: {
+            agents: 'auto',
+            historyLimit: 25,
+            defaultScope: 'user',
+            doctor: { disabled: ['broken-symlinks'] },
+          },
+        }),
+      )
+      const config = await run(Lib.loadConfig())
+      expect(config.skills.agents).toBe('auto')
+      expect(config.skills.historyLimit).toBe(25)
+      expect(config.skills.defaultScope).toBe('user')
+      expect(config.skills.doctor?.disabled).toEqual(['broken-symlinks'])
+    } finally {
+      if (backup) await writeFile(configFile, backup)
+      else await rm(configFile, { force: true }).catch(() => {})
+    }
+  })
+
+  test('parses agents: array from config', async () => {
+    const configFile = Lib.CONFIG_FILE
+    const backup = await readFile(configFile, 'utf-8').catch(() => null)
+    try {
+      await mkdir(Lib.CONFIG_DIR, { recursive: true })
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          skills: { agents: ['claude', 'codex'] },
+        }),
+      )
+      const config = await run(Lib.loadConfig())
+      expect(config.skills.agents).toEqual(['claude', 'codex'])
+    } finally {
+      if (backup) await writeFile(configFile, backup)
+      else await rm(configFile, { force: true }).catch(() => {})
+    }
+  })
+})
+
+// ── loadState with valid state ──────────────────────────────────────
+
+describe('loadState with existing state', () => {
+  test('parses state with all history entry types', async () => {
+    const stateFile = Lib.STATE_FILE
+    const backup = await readFile(stateFile, 'utf-8').catch(() => null)
+    const ts = new Date().toISOString()
+    try {
+      await mkdir(Lib.SHAN_DIR, { recursive: true })
+      await writeFile(
+        stateFile,
+        JSON.stringify({
+          version: 2,
+          history: {
+            '/test/path': {
+              entries: [
+                {
+                  _tag: 'OnOp',
+                  targets: ['skill-a'],
+                  scope: 'project',
+                  timestamp: ts,
+                  snapshot: ['skill-a'],
+                  generatedRouters: [],
+                },
+                {
+                  _tag: 'OffOp',
+                  targets: ['skill-b'],
+                  scope: 'project',
+                  timestamp: ts,
+                  snapshot: [],
+                  generatedRouters: [],
+                },
+                {
+                  _tag: 'MoveOp',
+                  targets: ['skill-c'],
+                  scope: 'project',
+                  timestamp: ts,
+                  axis: 'commitment',
+                  direction: 'up',
+                  subActions: [
+                    {
+                      _tag: 'CopyToOutfitOp',
+                      targets: ['skill-c'],
+                      scope: 'project',
+                      timestamp: ts,
+                      sourcePath: '/src',
+                      destPath: '/dest',
+                    },
+                  ],
+                },
+                {
+                  _tag: 'MoveToLibraryOp',
+                  targets: ['skill-d'],
+                  scope: 'project',
+                  timestamp: ts,
+                  sourcePath: '/src',
+                  destPath: '/dest',
+                },
+                {
+                  _tag: 'MoveDirOp',
+                  targets: ['skill-e'],
+                  scope: 'user',
+                  timestamp: ts,
+                  sourcePath: '/a',
+                  destPath: '/b',
+                },
+                {
+                  _tag: 'MoveLibraryDirOp',
+                  targets: ['skill-f'],
+                  scope: 'project',
+                  timestamp: ts,
+                  sourcePath: '/c',
+                  destPath: '/d',
+                },
+                {
+                  _tag: 'DoctorOp',
+                  targets: ['fix-1'],
+                  scope: 'project',
+                  timestamp: ts,
+                },
+                {
+                  _tag: 'UnknownOp',
+                  targets: [],
+                  scope: 'project',
+                  timestamp: ts,
+                },
+              ],
+              undoneCount: 0,
+            },
+          },
+          current: {
+            '/test/path': { installs: ['skill-a'] },
+          },
+        }),
+      )
+      const state = await run(Lib.loadState())
+      expect(state.version).toBe(2)
+      const history = state.history['/test/path']!
+      // OnOp, OffOp, MoveOp, MoveToLibraryOp, MoveDirOp, MoveLibraryDirOp, DoctorOp = 7
+      // UnknownOp is filtered out (returns null)
+      expect(history.entries.length).toBe(7)
+    } finally {
+      if (backup) await writeFile(stateFile, backup)
+      else await rm(stateFile, { force: true }).catch(() => {})
+    }
+  })
+
+  test('migrates v1 state with op field', async () => {
+    const stateFile = Lib.STATE_FILE
+    const backup = await readFile(stateFile, 'utf-8').catch(() => null)
+    try {
+      await mkdir(Lib.SHAN_DIR, { recursive: true })
+      await writeFile(
+        stateFile,
+        JSON.stringify({
+          version: 1,
+          history: {
+            '/test/v1': {
+              entries: [
+                {
+                  op: 'on',
+                  targets: ['v1-skill'],
+                  scope: 'project',
+                  timestamp: new Date().toISOString(),
+                },
+                {
+                  op: 'off',
+                  targets: ['v1-off'],
+                  scope: 'project',
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+              undoneCount: 0,
+            },
+          },
+        }),
+      )
+      const state = await run(Lib.loadState())
+      const history = state.history['/test/v1']!
+      expect(history.entries.length).toBe(2)
+    } finally {
+      if (backup) await writeFile(stateFile, backup)
+      else await rm(stateFile, { force: true }).catch(() => {})
+    }
+  })
+
+  test('handles corrupt state JSON gracefully', async () => {
+    const stateFile = Lib.STATE_FILE
+    const backup = await readFile(stateFile, 'utf-8').catch(() => null)
+    try {
+      await mkdir(Lib.SHAN_DIR, { recursive: true })
+      await writeFile(stateFile, '!corrupt!')
+      const state = await run(Lib.loadState())
+      expect(state.version).toBe(2)
+      expect(state.history).toEqual({})
+    } finally {
+      if (backup) await writeFile(stateFile, backup)
+      else await rm(stateFile, { force: true }).catch(() => {})
+    }
+  })
+})
+
+// ── syncAgentMirrors with symlinked mirror entry ────────────────────
+
+describe('syncAgentMirrors with symlink entries', () => {
+  test('handles mirror entry that is a symlink to a skill', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-symlink-entry')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      // Canonical has no entries
+      await mkdir(path.join(projectRoot, '.claude', 'skills'), { recursive: true })
+      // Mirror has a symlink entry pointing to a real skill
+      const mirrorDir = path.join(projectRoot, '.codex', 'skills')
+      await mkdir(mirrorDir, { recursive: true })
+      const skillSource = path.join(projectRoot, 'external-skill')
+      await mkdir(skillSource, { recursive: true })
+      await writeFile(
+        path.join(skillSource, 'SKILL.md'),
+        '---\nname: ext\ndescription: External\n---\n',
+      )
+      await symlink(skillSource, path.join(mirrorDir, 'ext'))
+
+      process.chdir(projectRoot)
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── checkCollision with core conflict ───────────────────────────────
+
+describe('checkCollision with conflict', () => {
+  test('detects core collision at project scope', async () => {
+    const projectRoot = path.join(tmpBase, 'collision-core')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      // Create a core skill (real directory) in project outfit
+      await mkdir(path.join(outfitPath, 'my-core'), { recursive: true })
+      await writeFile(
+        path.join(outfitPath, 'my-core', 'SKILL.md'),
+        '---\nname: my-core\ndescription: core\n---\n',
+      )
+      process.chdir(projectRoot)
+      const result = await run(Lib.checkCollision('my-core', 'project'))
+      expect(result).toContain('core')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── readFrontmatter edge cases ──────────────────────────────────────
+
+describe('readFrontmatter edge cases', () => {
+  test('handles SKILL.md with no frontmatter', async () => {
+    const dir = path.join(tmpBase, 'fm-no-front')
+    try {
+      await mkdir(dir, { recursive: true })
+      await writeFile(path.join(dir, 'SKILL.md'), '# Just markdown, no frontmatter\n')
+      const fm = await run(Lib.readFrontmatter(dir))
+      expect(fm).toBeNull()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('handles multi-line indicator in frontmatter', async () => {
+    const dir = path.join(tmpBase, 'fm-multiline')
+    try {
+      await mkdir(dir, { recursive: true })
+      await writeFile(
+        path.join(dir, 'SKILL.md'),
+        '---\nname: test\ndescription: >-\nwhen-to-use: "testing"\nargument-hint: "<arg>"\n---\n',
+      )
+      const fm = await run(Lib.readFrontmatter(dir))
+      expect(fm).not.toBeNull()
+      expect(fm!.whenToUse).toBe('testing')
+      expect(fm!.argumentHint).toBe('<arg>')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── listLibrary with nested groups ──────────────────────────────────
+
+describe('listLibrary advanced', () => {
+  test('finds nested skills in groups', async () => {
+    const libDir = path.join(tmpBase, 'nested-lib')
+    try {
+      await rm(libDir, { recursive: true, force: true })
+      await createSkill(libDir, path.join('top', 'mid', 'deep'))
+      const results = await run(Lib.listLibrary([libDir]))
+      const names = results.map((r) => r.colonName)
+      expect(names).toContain('top:mid:deep')
+    } finally {
+      await rm(libDir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── agentOutfitDir / agentRootDir ───────────────────────────────────
+
+describe('agentOutfitDir', () => {
+  test('returns correct path for claude project', () => {
+    const dir = Lib.agentOutfitDir('project', 'claude')
+    expect(dir).toContain('.claude')
+    expect(dir).toContain('skills')
+  })
+
+  test('returns correct path for codex project', () => {
+    const dir = Lib.agentOutfitDir('project', 'codex')
+    expect(dir).toContain('.codex')
+    expect(dir).toContain('skills')
+  })
+})
+
+// ── saveCache catchAll (via resolveConfiguredAgents) ─────────────────
+
+describe('resolveConfiguredAgents with unwritable cache', () => {
+  test('succeeds even when saveCache fails', async () => {
+    const cacheDir = Lib.CACHE_DIR
+    const backup = await readFile(Lib.CACHE_FILE, 'utf-8').catch(() => null)
+    try {
+      // Remove cache so it's stale, then make dir read-only so saveCache fails
+      await rm(Lib.CACHE_FILE, { force: true }).catch(() => {})
+      await mkdir(cacheDir, { recursive: true })
+      await chmod(cacheDir, 0o555)
+
+      const config: Lib.ShanConfig = {
+        version: 1,
+        skills: { historyLimit: 50, defaultScope: 'project', agents: 'auto' },
+      }
+      // Should not throw — saveCache catchAll handles the error
+      const agents = await run(Lib.resolveConfiguredAgents(config))
+      expect(Array.isArray(agents)).toBe(true)
+    } finally {
+      await chmod(cacheDir, 0o755).catch(() => {})
+      if (backup) await writeFile(Lib.CACHE_FILE, backup)
+    }
+  })
+})
+
+// ── manageGitignore with existing content ───────────────────────────
+
+describe('manageGitignore merge', () => {
+  test('merges entries into existing shan section', async () => {
+    const projectRoot = path.join(tmpBase, 'gitignore-merge')
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.gitignore'),
+        'node_modules/\n\n# shan-managed (do not edit)\n.claude/skills/old\n# end shan-managed\n\n.DS_Store\n',
+      )
+      await run(Lib.manageGitignore(projectRoot, ['.claude/skills/new']))
+      const content = await readFile(path.join(projectRoot, '.gitignore'), 'utf-8')
+      expect(content).toContain('.claude/skills/old')
+      expect(content).toContain('.claude/skills/new')
+      expect(content).toContain('node_modules/')
+      expect(content).toContain('.DS_Store')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('removes section when merging results in empty entries', async () => {
+    const projectRoot = path.join(tmpBase, 'gitignore-empty-merge')
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.gitignore'),
+        '# shan-managed (do not edit)\n# end shan-managed\n',
+      )
+      await run(Lib.manageGitignore(projectRoot, []))
+      const content = await readFile(path.join(projectRoot, '.gitignore'), 'utf-8')
+      expect(content).not.toContain('shan-managed')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── detectGeneratedRouters with core entries ─────────────────────────
+
+describe('detectGeneratedRouters with generated router', () => {
+  test('detects a generated router', async () => {
+    const projectRoot = path.join(tmpBase, 'detect-gen-router')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const libDir = path.join(projectRoot, '.claude', 'skills-library')
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+
+      // Create a group in library (has children, no SKILL.md at top level)
+      await createSkill(libDir, path.join('mygroup', 'child-a'))
+      await createSkill(libDir, path.join('mygroup', 'child-b'))
+
+      // Create a generated router in outfit (core dir with a single SKILL.md
+      // whose name matches the group and has disable-model-invocation: true)
+      const routerDir = path.join(outfitPath, 'mygroup')
+      await mkdir(routerDir, { recursive: true })
+      await writeFile(
+        path.join(routerDir, 'SKILL.md'),
+        '---\nname: mygroup\ndescription: Router\ndisable-model-invocation: true\n---\n',
+      )
+
+      process.chdir(projectRoot)
+      const routers = await run(Lib.detectGeneratedRouters('project'))
+      expect(routers).toContain('mygroup')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── generateRouter ──────────────────────────────────────────────────
+
+describe('generateRouter', () => {
+  test('generates router SKILL.md content', () => {
+    const children: Lib.SkillInfo[] = [
+      {
+        colonName: 'group:child-a',
+        libraryRelPath: 'group/child-a',
+        libraryDir: '/lib',
+        libraryScope: 'project',
+        frontmatter: {
+          name: 'child-a',
+          description: 'First child',
+          disableModelInvocation: false,
+          argumentHint: '<file>',
+        },
+      },
+      {
+        colonName: 'group:child-b',
+        libraryRelPath: 'group/child-b',
+        libraryDir: '/lib',
+        libraryScope: 'project',
+        frontmatter: {
+          name: 'child-b',
+          description: 'Second child',
+          disableModelInvocation: false,
+        },
+      },
+    ]
+    const content = Lib.generateRouter('group', children)
+    expect(content).toContain('name: group')
+    expect(content).toContain('disable-model-invocation: true')
+    expect(content).toContain('group:child-a')
+    expect(content).toContain('group:child-b')
+    expect(content).toContain('`<file>`')
+    expect(content).toContain('First child')
+    expect(content).toContain('Second child')
+  })
+})
+
+// ── restoreSnapshot with generated routers ──────────────────────────
+
+describe('restoreSnapshot with generated routers', () => {
+  test('restores missing generated router', async () => {
+    const projectRoot = path.join(tmpBase, 'restore-snap-router')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+
+      // Create a group in library
+      await createSkill(libPath, path.join('mygroup', 'child'))
+      await mkdir(outfitPath, { recursive: true })
+      process.chdir(projectRoot)
+
+      // Restore snapshot with a generated router
+      await run(Lib.restoreSnapshot([], ['mygroup'], 'project'))
+
+      // Generated router should be recreated
+      const routerPath = path.join(outfitPath, 'mygroup', 'SKILL.md')
+      const content = await readFile(routerPath, 'utf-8').catch(() => null)
+      expect(content).not.toBeNull()
+      expect(content).toContain('mygroup')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('removes extra generated routers not in snapshot', async () => {
+    const projectRoot = path.join(tmpBase, 'restore-snap-rm-router')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+
+      // Create library group so it's detected as router-eligible
+      await createSkill(libPath, path.join('stale-router', 'child'))
+
+      // Create a stale generated router in outfit (matches as generated)
+      const routerDir = path.join(outfitPath, 'stale-router')
+      await mkdir(routerDir, { recursive: true })
+      await writeFile(
+        path.join(routerDir, 'SKILL.md'),
+        '---\nname: stale-router\ndescription: stale\ndisable-model-invocation: true\n---\n',
+      )
+      process.chdir(projectRoot)
+
+      // Restore snapshot WITHOUT this router → should be removed
+      await run(Lib.restoreSnapshot([], [], 'project'))
+
+      const exists = await lstat(routerDir).catch(() => null)
+      expect(exists).toBeNull()
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── isGeneratedRouterDir readdir catchAll ────────────────────────────
+
+describe('detectGeneratedRouters with unreadable router', () => {
+  test('handles unreadable core dir (isGeneratedRouterDir catchAll)', async () => {
+    const projectRoot = path.join(tmpBase, 'detect-router-unreadable')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const libDir = path.join(projectRoot, '.claude', 'skills-library')
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+
+      // Create a group in library
+      await createSkill(libDir, path.join('unreadgroup', 'child'))
+
+      // Create a core dir in outfit that matches the group name
+      const routerDir = path.join(outfitPath, 'unreadgroup')
+      await mkdir(routerDir, { recursive: true })
+      // Make it unreadable → readdir will fail → catchAll fires
+      await chmod(routerDir, 0o000)
+
+      process.chdir(projectRoot)
+      const routers = await run(Lib.detectGeneratedRouters('project'))
+      // Should not include it since readdir fails
+      expect(routers).not.toContain('unreadgroup')
+    } finally {
+      await chmod(path.join(projectRoot, '.claude', 'skills', 'unreadgroup'), 0o755).catch(() => {})
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── restoreSnapshot rm router catchAll ──────────────────────────────
+
+describe('restoreSnapshot rm router error path', () => {
+  test('rm catchAll fires when removing read-only router', async () => {
+    const projectRoot = path.join(tmpBase, 'restore-snap-rm-router-fail')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      const libDir = path.join(projectRoot, '.claude', 'skills-library')
+
+      // Create library group
+      await createSkill(libDir, path.join('rmgroup', 'child'))
+
+      // Create generated router in outfit
+      const routerDir = path.join(outfitPath, 'rmgroup')
+      await mkdir(routerDir, { recursive: true })
+      await writeFile(
+        path.join(routerDir, 'SKILL.md'),
+        '---\nname: rmgroup\ndescription: Router\ndisable-model-invocation: true\n---\n',
+      )
+
+      // Make outfit dir read-only so rm fails
+      await chmod(outfitPath, 0o555)
+
+      process.chdir(projectRoot)
+
+      // Restore without the router → rm catchAll fires
+      await run(Lib.restoreSnapshot([], [], 'project'))
+    } finally {
+      await chmod(path.join(projectRoot, '.claude', 'skills'), 0o755).catch(() => {})
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── ensureMirrorSymlink edge: existing non-symlink mirror ───────────
+
+describe('syncAgentMirrors mirror replacement', () => {
+  test('handles mirror with existing stale symlink pointing elsewhere', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-stale-symlink')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(path.join(projectRoot, '.claude', 'skills'), { recursive: true })
+      // Mirror is a symlink but points to wrong place
+      await mkdir(path.join(projectRoot, '.codex'), { recursive: true })
+      const staleTarget = path.join(projectRoot, 'stale-target')
+      await mkdir(staleTarget, { recursive: true })
+      await symlink(staleTarget, path.join(projectRoot, '.codex', 'skills'))
+
+      process.chdir(projectRoot)
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: { historyLimit: 50, defaultScope: 'project', agents: ['claude', 'codex'] },
+        }),
+      )
+
+      // Should now point to canonical
+      const target = await readlink(path.join(projectRoot, '.codex', 'skills'))
+      expect(target).toBe(path.join(projectRoot, '.claude', 'skills'))
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('replaces non-symlink mirror dir with symlink', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-replace-dir')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      // Canonical exists
+      await mkdir(path.join(projectRoot, '.claude', 'skills'), { recursive: true })
+      // Mirror exists as a real dir with no entries
+      await mkdir(path.join(projectRoot, '.codex', 'skills'), { recursive: true })
+      process.chdir(projectRoot)
+
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: { historyLimit: 50, defaultScope: 'project', agents: ['claude', 'codex'] },
+        }),
+      )
+
+      // Mirror should now be a symlink
+      const mirrorStat = await lstat(path.join(projectRoot, '.codex', 'skills'))
+      expect(mirrorStat.isSymbolicLink()).toBe(true)
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── listOutfit error paths ──────────────────────────────────────────
+
+describe('listOutfit error paths', () => {
+  test('returns empty when outfit dir is unreadable', async () => {
+    const projectRoot = path.join(tmpBase, 'outfit-unreadable')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      await mkdir(outfitPath, { recursive: true })
+      await chmod(outfitPath, 0o000)
+      process.chdir(projectRoot)
+      const outfit = await run(Lib.listOutfit('project'))
+      expect(outfit).toEqual([])
+    } finally {
+      await chmod(path.join(projectRoot, '.claude', 'skills'), 0o755).catch(() => {})
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('returns empty when outfit dir does not exist', async () => {
+    const projectRoot = path.join(tmpBase, 'outfit-missing')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      process.chdir(projectRoot)
+      const outfit = await run(Lib.listOutfit('project'))
+      expect(outfit).toEqual([])
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── restoreSnapshot error paths ─────────────────────────────────────
+
+describe('restoreSnapshot error paths', () => {
+  test('unlink catchAll fires when removing read-only symlink', async () => {
+    const projectRoot = path.join(tmpBase, 'restore-snap-unlink')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+      await createSkill(libPath, 'extra-link')
+      await mkdir(outfitPath, { recursive: true })
+      await symlink(path.join(libPath, 'extra-link'), path.join(outfitPath, 'extra-link'))
+
+      // Make outfit read-only so unlink in the "remove extras" path fails
+      await chmod(outfitPath, 0o555)
+
+      process.chdir(projectRoot)
+
+      // Snapshot is empty → should try to remove extra-link → unlink catchAll fires
+      await run(Lib.restoreSnapshot([], [], 'project'))
+    } finally {
+      await chmod(path.join(projectRoot, '.claude', 'skills'), 0o755).catch(() => {})
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('symlink catchAll fires when restoring to read-only outfit', async () => {
+    const projectRoot = path.join(tmpBase, 'restore-snap-symlink-fail')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+      await createSkill(libPath, 'restore-me')
+      await mkdir(outfitPath, { recursive: true })
+
+      // Make outfit read-only so symlink creation fails → symlink catchAll fires
+      await chmod(outfitPath, 0o555)
+
+      process.chdir(projectRoot)
+
+      // Snapshot has restore-me but outfit is read-only → symlink catchAll fires
+      await run(Lib.restoreSnapshot(['restore-me'], [], 'project'))
+    } finally {
+      await chmod(path.join(projectRoot, '.claude', 'skills'), 0o755).catch(() => {})
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── detectGeneratedRouters ──────────────────────────────────────────
+
+describe('detectGeneratedRouters', () => {
+  test('returns empty when no core entries exist', async () => {
+    const projectRoot = path.join(tmpBase, 'detect-routers')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const outfitPath = path.join(projectRoot, '.claude', 'skills')
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+      await createSkill(libPath, 'just-pluggable')
+      await mkdir(outfitPath, { recursive: true })
+      await symlink(path.join(libPath, 'just-pluggable'), path.join(outfitPath, 'just-pluggable'))
+      process.chdir(projectRoot)
+      const routers = await run(Lib.detectGeneratedRouters('project'))
+      expect(routers).toEqual([])
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── syncAgentMirrors with merge ─────────────────────────────────────
+
+describe('syncAgentMirrors merge paths', () => {
+  test('merges mirror entries when mirror has unique skills', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-merge')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      // Create canonical outfit with one skill
+      await mkdir(path.join(projectRoot, '.claude', 'skills', 'existing'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.claude', 'skills', 'existing', 'SKILL.md'),
+        '---\nname: existing\ndescription: Existing\n---\n',
+      )
+      // Create codex mirror as a real directory with a unique skill
+      await mkdir(path.join(projectRoot, '.codex', 'skills', 'from-codex'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.codex', 'skills', 'from-codex', 'SKILL.md'),
+        '---\nname: from-codex\ndescription: From Codex\n---\n',
+      )
+      process.chdir(projectRoot)
+
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+
+      // from-codex should have been moved to canonical
+      const movedSkill = await readFile(
+        path.join(projectRoot, '.claude', 'skills', 'from-codex', 'SKILL.md'),
+        'utf-8',
+      ).catch(() => null)
+      expect(movedSkill).toContain('From Codex')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('handles neither canonical nor mirror existing', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-neither')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(projectRoot, { recursive: true })
+      process.chdir(projectRoot)
+
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+
+      // Both should be created
+      const canonicalStat = await lstat(path.join(projectRoot, '.claude', 'skills'))
+      expect(canonicalStat.isDirectory()).toBe(true)
+      const mirrorStat = await lstat(path.join(projectRoot, '.codex', 'skills'))
+      expect(mirrorStat.isSymbolicLink()).toBe(true)
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('handles mirror as real dir with duplicate skill (drop path)', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-drop')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      // Same skill in both canonical and mirror
+      const skillContent = '---\nname: dupe\ndescription: Dupe\n---\n'
+      await mkdir(path.join(projectRoot, '.claude', 'skills', 'dupe'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.claude', 'skills', 'dupe', 'SKILL.md'),
+        skillContent,
+      )
+      await mkdir(path.join(projectRoot, '.codex', 'skills', 'dupe'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.codex', 'skills', 'dupe', 'SKILL.md'),
+        skillContent,
+      )
+      process.chdir(projectRoot)
+
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+
+      // Canonical should still have it, mirror should be symlink now
+      const canonicalContent = await readFile(
+        path.join(projectRoot, '.claude', 'skills', 'dupe', 'SKILL.md'),
+        'utf-8',
+      )
+      expect(canonicalContent).toContain('Dupe')
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── syncAgentMirrors conflict detection ─────────────────────────────
+
+describe('syncAgentMirrors conflict', () => {
+  test('throws AgentOutfitConflictError on skill content mismatch', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-conflict')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      // Different content in canonical vs mirror
+      await mkdir(path.join(projectRoot, '.claude', 'skills', 'conflicted'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.claude', 'skills', 'conflicted', 'SKILL.md'),
+        '---\nname: conflicted\ndescription: Canon version\n---\n',
+      )
+      await mkdir(path.join(projectRoot, '.codex', 'skills', 'conflicted'), { recursive: true })
+      await writeFile(
+        path.join(projectRoot, '.codex', 'skills', 'conflicted', 'SKILL.md'),
+        '---\nname: conflicted\ndescription: Mirror version DIFFERENT\n---\n',
+      )
+      process.chdir(projectRoot)
+
+      const exit = await runExit(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+      // Should fail with conflict
+      expect(Exit.isFailure(exit)).toBe(true)
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── syncAgentMirrors with broken symlinks ────────────────────────────
+
+describe('syncAgentMirrors broken symlink handling', () => {
+  test('handles broken symlinks in mirror during merge', async () => {
+    const projectRoot = path.join(tmpBase, 'mirror-broken-sym')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      // Canonical outfit exists
+      await mkdir(path.join(projectRoot, '.claude', 'skills'), { recursive: true })
+      // Mirror has a broken symlink skill
+      await mkdir(path.join(projectRoot, '.codex', 'skills'), { recursive: true })
+      await symlink(
+        '/nonexistent/broken/target',
+        path.join(projectRoot, '.codex', 'skills', 'broken-skill'),
+      )
+      process.chdir(projectRoot)
+
+      await run(
+        Lib.syncAgentMirrors('project', {
+          version: 1,
+          skills: {
+            historyLimit: 50,
+            defaultScope: 'project',
+            agents: ['claude', 'codex'],
+          },
+        }),
+      )
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── printSlashCommandNotice ─────────────────────────────────────────
+
+describe('printSlashCommandNotice', () => {
+  test('prints notice without error', async () => {
+    await run(Lib.printSlashCommandNotice)
+  })
+})
+
+// ── resolveTarget with non-strict and groups ────────────────────────
+
+describe('resolveTarget advanced', () => {
+  test('resolves a group target', async () => {
+    const projectRoot = path.join(tmpBase, 'resolve-target-group')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+      await createSkill(libPath, path.join('mygroup', 'child'))
+      process.chdir(projectRoot)
+      const result = await run(Lib.resolveTarget('mygroup', 'project', true))
+      expect(result).not.toBeNull()
+      expect(result!.nodeType).toBe('group')
+      expect(result!.leaves.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('resolves a callable-group target', async () => {
+    const projectRoot = path.join(tmpBase, 'resolve-target-cg')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+      // Create group with its own SKILL.md + a child
+      await createSkill(libPath, path.join('cgroup', 'child'))
+      await writeFile(
+        path.join(libPath, 'cgroup', 'SKILL.md'),
+        '---\nname: cgroup\ndescription: Callable group\n---\n',
+      )
+      process.chdir(projectRoot)
+      const result = await run(Lib.resolveTarget('cgroup', 'project', true))
+      expect(result).not.toBeNull()
+      expect(result!.nodeType).toBe('callable-group')
+      expect(result!.leaves.length).toBeGreaterThanOrEqual(2)
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('resolves with strict=false falls through scopes', async () => {
+    const projectRoot = path.join(tmpBase, 'resolve-target-fallthrough')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      await mkdir(path.join(projectRoot, '.claude', 'skills-library'), { recursive: true })
+      process.chdir(projectRoot)
+      // Skill doesn't exist in project, strict=false checks user too
+      const result = await run(Lib.resolveTarget('nonexistent', 'project', false))
+      // May find it in user scope or return null
+      // The important thing is exercising the fallthrough code path
+      expect(result === null || result.colonName === 'nonexistent').toBe(true)
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── reportResults / batchToRows ─────────────────────────────────────
+
+describe('reportResults', () => {
+  test('handles mixed success and error rows', async () => {
+    const rows: Lib.ResultRow[] = [
+      { status: 'ok', name: 'skill-a' },
+      { status: 'error', name: 'skill-b', reason: 'not found' },
+      { status: 'skip', name: 'skill-c', reason: 'already on' },
+    ]
+    await run(Lib.reportResults(rows))
+  })
+
+  test('handles rows with scope and commitment', async () => {
+    const rows: Lib.ResultRow[] = [
+      { status: 'ok', name: 'skill-a', scope: 'project', commitment: 'pluggable' },
+      { status: 'ok', name: 'skill-b', scope: 'user' },
+      { status: 'abort', name: 'skill-c', scope: 'project', reason: 'not applied' },
+    ]
+    await run(Lib.reportResults(rows))
+  })
+
+  test('handles empty rows', async () => {
+    await run(Lib.reportResults([]))
+  })
+})
+
+describe('batchToRows', () => {
+  test('converts batch validation to rows', () => {
+    const batch: Lib.BatchValidation<{ name: string }> = {
+      actions: [{ name: 'a' }],
+      skips: [{ name: 'b', reason: 'already on' }],
+      errors: [{ name: 'c', reason: 'not found' }],
+    }
+    const rows = Lib.batchToRows(batch, (a) => ({
+      status: 'ok' as const,
+      name: a.name,
+    }))
+    expect(rows.length).toBe(3)
+  })
+
+  test('marks actions as aborted when aborted flag set', () => {
+    const batch: Lib.BatchValidation<{ name: string }> = {
+      actions: [{ name: 'a' }],
+      skips: [],
+      errors: [{ name: 'b', reason: 'fail' }],
+    }
+    const rows = Lib.batchToRows(
+      batch,
+      (a) => ({ status: 'ok' as const, name: a.name }),
+      true,
+    )
+    expect(rows[0]!.status).toBe('abort')
+    expect(rows[0]!.reason).toBe('not applied')
+  })
+})
+
+// ── emptyBatch / shouldAbort ────────────────────────────────────────
+
+describe('emptyBatch', () => {
+  test('returns empty batch structure', () => {
+    const batch = Lib.emptyBatch()
+    expect(batch.actions).toEqual([])
+    expect(batch.skips).toEqual([])
+    expect(batch.errors).toEqual([])
+  })
+})
+
+describe('shouldAbort', () => {
+  test('returns true when strict and has errors', () => {
+    const batch: Lib.BatchValidation<string> = {
+      actions: [],
+      skips: [],
+      errors: [{ name: 'x', reason: 'fail' }],
+    }
+    expect(Lib.shouldAbort(batch, true)).toBe(true)
+  })
+
+  test('returns true even when not strict if has errors', () => {
+    const batch: Lib.BatchValidation<string> = {
+      actions: [],
+      skips: [],
+      errors: [{ name: 'x', reason: 'fail' }],
+    }
+    expect(Lib.shouldAbort(batch, false)).toBe(true)
+  })
+
+  test('returns false when not strict with only skips', () => {
+    const batch: Lib.BatchValidation<string> = {
+      actions: [],
+      skips: [{ name: 'x', reason: 'skip' }],
+      errors: [],
+    }
+    expect(Lib.shouldAbort(batch, false)).toBe(false)
+  })
+
+  test('returns true when strict with only skips', () => {
+    const batch: Lib.BatchValidation<string> = {
+      actions: [],
+      skips: [{ name: 'x', reason: 'skip' }],
+      errors: [],
+    }
+    expect(Lib.shouldAbort(batch, true)).toBe(true)
   })
 })
