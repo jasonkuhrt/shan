@@ -202,6 +202,38 @@ export const resolveSkillsOnScope = (flags: ParsedFlags, targetInput: string) =>
     return 'project' as const
   })
 
+const historyCommands = new Set(['undo', 'redo', 'history'])
+
+/**
+ * Unified scope resolver for all skills subcommands.
+ *
+ * - Explicit --scope / --global flags always win.
+ * - Target-based commands (on, off, move, etc.) infer scope from where the target lives.
+ * - History commands (undo, redo, history) with no explicit scope check which scope
+ *   has active history entries and prefer that. Falls back to project if both or neither have history.
+ */
+export const resolveSkillsScope = (flags: ParsedFlags, command: string, targetInput: string) =>
+  Effect.gen(function* () {
+    // Explicit flags always win
+    if (flags.global || flags.scope === 'user') return 'user' as const
+    if (flags.scope === 'project') return 'project' as const
+
+    // History commands: infer from where history exists
+    if (historyCommands.has(command)) {
+      const state = yield* Lib.loadState()
+      const projectHistory = Lib.getProjectHistory(state, 'project')
+      const userHistory = Lib.getProjectHistory(state, 'user')
+      const projectHasActive = projectHistory.entries.length - projectHistory.undoneCount > 0
+      const userHasActive = userHistory.entries.length - userHistory.undoneCount > 0
+
+      if (userHasActive && !projectHasActive) return 'user' as const
+      return 'project' as const
+    }
+
+    // Target-based commands: infer from where the target lives
+    return yield* resolveSkillsOnScope(flags, targetInput)
+  })
+
 export const program = Effect.gen(function* () {
   const [namespace, command, ...args] = process.argv.slice(2)
 
@@ -242,10 +274,8 @@ export const program = Effect.gen(function* () {
     }
   } else if (namespace === 'skills') {
     const { flags, positional } = parseArgs(args)
-    const scope =
-      command === 'on'
-        ? yield* resolveSkillsOnScope(flags, positional[0] ?? '')
-        : resolveScope(flags)
+    const targetInput = command === 'move' ? (positional[2] ?? '') : (positional[0] ?? '')
+    const scope = yield* resolveSkillsScope(flags, command ?? '', targetInput)
 
     if (command === 'on') {
       yield* skillsOn(positional[0] ?? '', { scope, strict: flags.strict })

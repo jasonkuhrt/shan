@@ -373,7 +373,7 @@ describe('on scope inference', () => {
 // ── off cross-scope guard ────────────────────────────────────────────
 
 describe('off cross-scope guard', () => {
-  test('off at project scope should NOT remove user-scope symlinks', async () => {
+  test('off without --scope infers user scope and removes user-scope symlinks', async () => {
     const env = await setupTestEnv()
     try {
       // Install a skill at user scope
@@ -385,12 +385,13 @@ describe('off cross-scope guard', () => {
       const linkBefore = await lstat(path.join(env.userOutfit, 'gel'))
       expect(linkBefore.isSymbolicLink()).toBe(true)
 
-      // Try to turn it off at project scope (the default)
-      await env.run(['skills', 'off', 'gel'])
+      // off with no --scope flag — should infer user scope and remove it
+      const offResult = await env.run(['skills', 'off', 'gel'])
+      expect(offResult.exitCode).toBe(0)
 
-      // The user-scope symlink should still be intact
-      const linkAfter = await lstat(path.join(env.userOutfit, 'gel'))
-      expect(linkAfter.isSymbolicLink()).toBe(true)
+      // The user-scope symlink should be gone
+      const linkAfter = await lstat(path.join(env.userOutfit, 'gel')).catch(() => null)
+      expect(linkAfter).toBeNull()
     } finally {
       await env.cleanup()
     }
@@ -907,7 +908,7 @@ describe('CC integration', () => {
 // ── libraryExists scope guard ─────────────────────────────────────────
 
 describe('libraryExists scope guard', () => {
-  test('off at project scope fails when only user library exists', async () => {
+  test('off infers user scope when only user library exists', async () => {
     const env = await setupTestEnv()
     try {
       await env.addUserLibrarySkill('onlyuser')
@@ -916,10 +917,13 @@ describe('libraryExists scope guard', () => {
       // Remove the project library so only user library exists
       await rm(env.projectLibrary, { recursive: true, force: true })
 
-      // off at project scope (default) should fail — no project library
+      // off with no flag — should infer user scope and succeed
       const result = await env.run(['skills', 'off', 'onlyuser'])
-      expect(result.exitCode).not.toBe(0)
-      expect(result.stderr).toContain('No skills library found')
+      expect(result.exitCode).toBe(0)
+
+      // Skill should be removed
+      const gone = await lstat(path.join(env.userOutfit, 'onlyuser')).catch(() => null)
+      expect(gone).toBeNull()
     } finally {
       await env.cleanup()
     }
