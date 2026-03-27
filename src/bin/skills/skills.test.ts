@@ -1503,3 +1503,62 @@ describe('scope inference symmetry', () => {
     }
   })
 })
+
+// ── legacy underscore-encoded skill names (codex review P1) ─────────
+//
+// colonToPath now uses SkillName.fromFrontmatterName which throws on
+// legacy underscore-encoded names like "devin_review". These exist in
+// real user libraries and persisted state.json history.
+
+describe('legacy underscore skill names', () => {
+  test('off should handle a skill whose library dir uses underscores', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Simulate a legacy library entry: underscore-encoded dir name
+      const legacyDir = path.join(env.userLibrary, 'devin_review')
+      await mkdir(legacyDir, { recursive: true })
+      await writeFile(
+        path.join(legacyDir, 'SKILL.md'),
+        '---\nname: devin_review\ndescription: Legacy skill\n---\n# devin_review\n',
+      )
+
+      // Install it — uses the colon name devin:review which maps to devin/review,
+      // but the library entry is at devin_review (flat). The on command should
+      // resolve this via library scanning.
+      const onResult = await env.run(['skills', 'on', 'devin_review', '--scope', 'user'])
+      expect(onResult.exitCode).toBe(0)
+
+      // Off should be able to find and remove it
+      const offResult = await env.run(['skills', 'off', 'devin_review', '--scope', 'user'])
+      expect(offResult.exitCode).toBe(0)
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('redo should work with persisted history containing underscore targets', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Create a skill with legacy underscore name in library
+      const legacyDir = path.join(env.projectLibrary, 'my_tool')
+      await mkdir(legacyDir, { recursive: true })
+      await writeFile(
+        path.join(legacyDir, 'SKILL.md'),
+        '---\nname: my_tool\ndescription: Legacy skill\n---\n# my_tool\n',
+      )
+
+      // Install, undo, then redo — redo replays stored targets through colonToPath
+      const onResult = await env.run(['skills', 'on', 'my_tool'])
+      expect(onResult.exitCode).toBe(0)
+
+      const undoResult = await env.run(['skills', 'undo'])
+      expect(undoResult.exitCode).toBe(0)
+
+      // Redo should not throw ParseError from colonToPath
+      const redoResult = await env.run(['skills', 'redo'])
+      expect(redoResult.exitCode).toBe(0)
+    } finally {
+      await env.cleanup()
+    }
+  })
+})

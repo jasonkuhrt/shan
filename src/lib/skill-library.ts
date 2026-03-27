@@ -1147,27 +1147,38 @@ export class BrokenOutfitDirError extends Data.TaggedError('BrokenOutfitDirError
 
 /** Translate colon name to library-relative path: "ts:tooling" → "ts/tooling" */
 export const colonToPath = (colonName: string): string =>
-  SkillName.parseFrontmatterName(colonName)
-    ? SkillName.toLibraryRelPath(SkillName.fromFrontmatterName(colonName))
-    : colonName.replaceAll(':', '/')
+  SkillName.toLibraryRelPath(SkillName.fromFrontmatterName(colonName))
 
 /** Translate library-relative path to colon name: "ts/tooling" → "ts:tooling" */
 export const pathToColon = (relPath: string): string =>
-  SkillName.parseLibraryRelPath(relPath)
-    ? SkillName.toFrontmatterName(SkillName.fromLibraryRelPath(relPath))
-    : relPath.replaceAll('/', ':')
+  SkillName.toFrontmatterName(SkillName.fromLibraryRelPath(relPath))
 
 /** Flatten a library-relative path to a symlink name: "ts/tooling" → "ts_tooling" */
 export const flattenName = (relPath: string): string =>
-  SkillName.parseLibraryRelPath(relPath)
-    ? SkillName.toFlatName(SkillName.fromLibraryRelPath(relPath))
-    : relPath.replaceAll('/', '_')
+  SkillName.toFlatName(SkillName.fromLibraryRelPath(relPath))
 
 /** Unflatten a symlink name to a library-relative path: "ts_tooling" → "ts/tooling" */
 export const unflattenName = (flatName: string): string =>
-  SkillName.parseFlatName(flatName)
-    ? SkillName.toLibraryRelPath(SkillName.fromFlatName(flatName))
-    : flatName
+  SkillName.toLibraryRelPath(SkillName.fromFlatName(flatName))
+
+const legacyLibraryRelPathCandidates = (flatName: string): readonly string[] => {
+  const parsed = SkillName.parseFlatName(flatName)
+  return parsed ? [SkillName.toLibraryRelPath(parsed), flatName] : [flatName]
+}
+
+const legacyObservedColonName = (relPath: string): string => relPath.split(path.sep).join(':')
+
+const legacyObservedFlatName = (relPath: string): string => relPath.split(path.sep).join('_')
+
+const observedColonNameFromLibraryRelPath = (relPath: string): string => {
+  const parsed = SkillName.parseObservedLibraryRelPath(relPath)
+  return parsed ? SkillName.toFrontmatterName(parsed) : legacyObservedColonName(relPath)
+}
+
+export const observedFlatNameFromLibraryRelPath = (relPath: string): string => {
+  const parsed = SkillName.parseObservedLibraryRelPath(relPath)
+  return parsed ? SkillName.toFlatName(parsed) : legacyObservedFlatName(relPath)
+}
 
 // ── Frontmatter parsing ────────────────────────────────────────────
 
@@ -1278,7 +1289,10 @@ export const getNodeType = (libraryPath: string) =>
  */
 export const resolveTarget = (colonName: string, scope: Scope = 'project', strict = true) =>
   Effect.gen(function* () {
-    const relPath = colonToPath(colonName)
+    const parsedTarget = SkillName.parseFrontmatterName(colonName)
+    if (!parsedTarget) return null
+
+    const relPath = SkillName.toLibraryRelPath(parsedTarget)
     const dirs = strict ? [scopeLibraryDir(scope)] : librarySearchOrder(scope)
 
     for (const libDir of dirs) {
@@ -1377,7 +1391,7 @@ export const resolveLeaves = (
       if (!entryStat?.isDirectory()) continue
 
       const childRelPath = path.join(relPath, entry)
-      const childColonName = pathToColon(childRelPath)
+      const childColonName = observedColonNameFromLibraryRelPath(childRelPath)
       const hasSkillMd = yield* Effect.tryPromise(async () => {
         const s = await lstat(path.join(entryPath, 'SKILL.md'))
         return s.isFile()
@@ -1605,7 +1619,7 @@ export const restoreSnapshot = (
         // Prefer the canonical unflattened path first, then fall back to the literal
         // name for invalid legacy directories that still need cleanup.
         const libDir = scopeLibraryDir(scope)
-        const candidates = [unflattenName(name), name]
+        const candidates = legacyLibraryRelPathCandidates(name)
         let resolved = false
         for (const candidate of candidates) {
           const libPath = path.join(libDir, candidate)

@@ -218,15 +218,26 @@ export const resolveSkillsScope = (flags: ParsedFlags, command: string, targetIn
     if (flags.global || flags.scope === 'user') return 'user' as const
     if (flags.scope === 'project') return 'project' as const
 
-    // History commands: infer from where history exists
+    // History commands: infer from which scope has the most recent active entry
     if (historyCommands.has(command)) {
       const state = yield* Lib.loadState()
       const projectHistory = Lib.getProjectHistory(state, 'project')
       const userHistory = Lib.getProjectHistory(state, 'user')
-      const projectHasActive = projectHistory.entries.length - projectHistory.undoneCount > 0
-      const userHasActive = userHistory.entries.length - userHistory.undoneCount > 0
+      const projectActiveCount = projectHistory.entries.length - projectHistory.undoneCount
+      const userActiveCount = userHistory.entries.length - userHistory.undoneCount
 
-      if (userHasActive && !projectHasActive) return 'user' as const
+      if (userActiveCount > 0 && projectActiveCount === 0) return 'user' as const
+      if (projectActiveCount > 0 && userActiveCount === 0) return 'project' as const
+
+      // Both have active history: prefer the scope with the most recent timestamp
+      if (userActiveCount > 0 && projectActiveCount > 0) {
+        const lastUserEntry = userHistory.entries[userActiveCount - 1]
+        const lastProjectEntry = projectHistory.entries[projectActiveCount - 1]
+        if (lastUserEntry && lastProjectEntry) {
+          return lastUserEntry.timestamp > lastProjectEntry.timestamp ? 'user' as const : 'project' as const
+        }
+      }
+
       return 'project' as const
     }
 
