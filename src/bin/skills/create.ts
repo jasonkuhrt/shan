@@ -46,8 +46,9 @@ export const skillsCreate = (name: string, options: SkillsCreateOptions) =>
       yield* Console.error('Usage: shan skills create <name> [--scope user|project]')
       yield* Console.error('  Name uses colon syntax (e.g. my-skill, ts:tooling)')
       yield* Console.error(
-        '  Each segment must start with a letter and contain only letters, digits, hyphens, or underscores',
+        '  Each segment must start with a letter and contain only letters, digits, or hyphens',
       )
+      yield* Console.error('  Underscores are reserved for filesystem namespace encoding')
       return yield* Effect.fail(new Error('Missing targets'))
     }
 

@@ -319,7 +319,6 @@ describe('skillsRedo', () => {
     // Now create a symlink where the OnOp replay would create one
     // so symlink() fails → catchAll fires
     const libPath = path.join(TEMP_DIR, '.claude', 'skills-library', 'redo-on-exists')
-    const { symlink } = await import('node:fs/promises')
     await symlink(libPath, corePath).catch(() => {})
 
     // Redo → OnOp sub-action: symlink already exists → catchAll
@@ -362,7 +361,6 @@ describe('skillsRedo', () => {
     // Manually recreate the symlink before redo
     const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
     const linkPath = path.join(outfitDir, 'redo-exists')
-    const { symlink } = await import('node:fs/promises')
     const libPath = path.join(TEMP_DIR, '.claude', 'skills-library', 'redo-exists')
     await symlink(libPath, linkPath)
 
@@ -376,9 +374,7 @@ describe('skillsRedo', () => {
     await run(skillsOn('redo-copy-fail', { scope: 'project', strict: false }))
 
     // commitment up → creates OffOp + CopyToOutfitOp sub-actions
-    await run(
-      skillsMove('commitment', 'up', 'redo-copy-fail', { scope: 'project', strict: false }),
-    )
+    await run(skillsMove('commitment', 'up', 'redo-copy-fail', { scope: 'project', strict: false }))
 
     // Undo
     await run(skillsUndo(1, 'project'))

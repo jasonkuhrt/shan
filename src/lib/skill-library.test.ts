@@ -1779,11 +1779,11 @@ describe('ensureOutfitDir', () => {
       const exit = await runExit(Lib.ensureOutfitDir(dir))
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) {
-        const err =
-          Cause.failureOption(exit.cause)._tag === 'Some'
-            ? Cause.failureOption(exit.cause).value
-            : null
-        expect(err).toBeInstanceOf(Lib.BrokenOutfitDirError)
+        const failure = Cause.failureOption(exit.cause)
+        expect(failure._tag).toBe('Some')
+        if (failure._tag === 'Some') {
+          expect(failure.value).toBeInstanceOf(Lib.BrokenOutfitDirError)
+        }
       }
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {})
@@ -2439,7 +2439,7 @@ describe('resolveHistoryOutfitDir', () => {
     expect(result).toContain('.claude')
   })
 
-  test('resolves absolute path to that path\'s outfit dir', () => {
+  test("resolves absolute path to that path's outfit dir", () => {
     const result = Lib.resolveHistoryOutfitDir('/some/project/path')
     expect(result).toBe('/some/project/path/.claude/skills')
   })
@@ -3358,15 +3358,9 @@ describe('syncAgentMirrors merge paths', () => {
       // Same skill in both canonical and mirror
       const skillContent = '---\nname: dupe\ndescription: Dupe\n---\n'
       await mkdir(path.join(projectRoot, '.claude', 'skills', 'dupe'), { recursive: true })
-      await writeFile(
-        path.join(projectRoot, '.claude', 'skills', 'dupe', 'SKILL.md'),
-        skillContent,
-      )
+      await writeFile(path.join(projectRoot, '.claude', 'skills', 'dupe', 'SKILL.md'), skillContent)
       await mkdir(path.join(projectRoot, '.codex', 'skills', 'dupe'), { recursive: true })
-      await writeFile(
-        path.join(projectRoot, '.codex', 'skills', 'dupe', 'SKILL.md'),
-        skillContent,
-      )
+      await writeFile(path.join(projectRoot, '.codex', 'skills', 'dupe', 'SKILL.md'), skillContent)
       process.chdir(projectRoot)
 
       await run(
@@ -3585,11 +3579,7 @@ describe('batchToRows', () => {
       skips: [],
       errors: [{ name: 'b', reason: 'fail' }],
     }
-    const rows = Lib.batchToRows(
-      batch,
-      (a) => ({ status: 'ok' as const, name: a.name }),
-      true,
-    )
+    const rows = Lib.batchToRows(batch, (a) => ({ status: 'ok' as const, name: a.name }), true)
     expect(rows[0]!.status).toBe('abort')
     expect(rows[0]!.reason).toBe('not applied')
   })

@@ -1,6 +1,6 @@
 import { Effect, ParseResult, Schema } from 'effect'
 
-const SKILL_NAME_SEGMENT_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_-]*$/
+const SKILL_NAME_SEGMENT_PATTERN = /^[a-zA-Z][a-zA-Z0-9-]*$/
 
 export const SkillNameSegment = Schema.String.pipe(Schema.pattern(SKILL_NAME_SEGMENT_PATTERN))
 export type SkillNameSegment = typeof SkillNameSegment.Type

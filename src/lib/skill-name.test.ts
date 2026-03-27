@@ -52,13 +52,18 @@ describe('skill-name codecs', () => {
 
   test('safe parsers return null for invalid names', () => {
     expect(SkillName.parseFrontmatterName('skills::change')).toBeNull()
+    expect(SkillName.parseFrontmatterName('skills:change_undo')).toBeNull()
+    expect(SkillName.parseFrontmatterName('_private:skill')).toBeNull()
     expect(SkillName.parseFlatName('skills__change')).toBeNull()
     expect(SkillName.parseLibraryRelPath('skills/$change')).toBeNull()
   })
 
-  test('codecs accept leading underscore segments', () => {
-    const name = SkillName.fromFrontmatterName('_private:skill')
-    expect(SkillName.toFlatName(name)).toBe('_private_skill')
-    expect(SkillName.toLibraryRelPath(name)).toBe('_private/skill')
+  test('flat codec treats underscores as namespace separators', () => {
+    const name = SkillName.fromFlatName('my_tool')
+    expect(name).toEqual({
+      namespace: ['my'],
+      leaf: 'tool',
+    })
+    expect(SkillName.toFrontmatterName(name)).toBe('my:tool')
   })
 })

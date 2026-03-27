@@ -2120,27 +2120,28 @@ describe('orphaned-router with real outfit', () => {
   test('detects orphaned router in outfit', async () => {
     // Create a router dir in user outfit that has no children
     const outfitPath = Lib.outfitDir('user')
-    const routerDir = path.join(outfitPath, '__test_orphan_router__')
+    const routerName = 'test-orphan-router'
+    const routerDir = path.join(outfitPath, routerName)
     const libDir = Lib.LIBRARY_DIR
-    const libRouterDir = path.join(libDir, '__test_orphan_router__')
+    const libRouterDir = path.join(libDir, routerName)
     try {
       // Create a matching group in library
       await mkdir(path.join(libRouterDir, 'child'), { recursive: true })
       await writeFile(
         path.join(libRouterDir, 'child', 'SKILL.md'),
-        `---\nname: __test_orphan_router__:child\ndescription: child\n---\n`,
+        `---\nname: ${routerName}:child\ndescription: child\n---\n`,
       )
       // Create the router dir in outfit (core commitment)
       await mkdir(routerDir, { recursive: true })
       await writeFile(
         path.join(routerDir, 'SKILL.md'),
-        Lib.generateRouter('__test_orphan_router__', [
+        Lib.generateRouter(routerName, [
           {
-            colonName: '__test_orphan_router__:child',
-            libraryRelPath: '__test_orphan_router__/child',
+            colonName: `${routerName}:child`,
+            libraryRelPath: `${routerName}/child`,
             libraryDir: Lib.LIBRARY_DIR,
             libraryScope: 'user',
-            frontmatter: { name: '__test_orphan_router__:child', description: 'child' },
+            frontmatter: { name: `${routerName}:child`, description: 'child' },
           },
         ]),
       )
@@ -2150,7 +2151,7 @@ describe('orphaned-router with real outfit', () => {
         userOutfit: outfit,
       })
       const findings = await run(aspect.detect(ctx))
-      const orphanFinding = findings.find((f) => f.message.includes('__test_orphan_router__'))
+      const orphanFinding = findings.find((f) => f.message.includes(routerName))
       if (orphanFinding) {
         expect(orphanFinding.aspect).toBe('orphaned-router')
         expect(orphanFinding.fixable).toBe(true)
@@ -2166,7 +2167,7 @@ describe('orphaned-router with real outfit', () => {
 
   test('ignores real core skills that share a library namespace', async () => {
     const outfitPath = Lib.outfitDir('user')
-    const skillName = '__test_router_core_skill__'
+    const skillName = 'test-router-core-skill'
     const skillDir = path.join(outfitPath, skillName)
     const libRouterDir = path.join(Lib.LIBRARY_DIR, skillName, 'child')
 
@@ -2203,15 +2204,16 @@ describe('stale-router with real outfit', () => {
 
   test('detects outdated router content', async () => {
     const outfitPath = Lib.outfitDir('user')
-    const routerDir = path.join(outfitPath, '__test_stale_router__')
+    const routerName = 'test-stale-router'
+    const routerDir = path.join(outfitPath, routerName)
     const libDir = Lib.LIBRARY_DIR
-    const libRouterDir = path.join(libDir, '__test_stale_router__')
+    const libRouterDir = path.join(libDir, routerName)
     try {
       // Create a group in library
       await mkdir(path.join(libRouterDir, 'child'), { recursive: true })
       await writeFile(
         path.join(libRouterDir, 'child', 'SKILL.md'),
-        '---\nname: "__test_stale_router__:child"\ndescription: "test child"\n---\nbody',
+        `---\nname: "${routerName}:child"\ndescription: "test child"\n---\nbody`,
       )
       // Create the router in outfit with outdated content
       await mkdir(routerDir, { recursive: true })
@@ -2224,7 +2226,7 @@ describe('stale-router with real outfit', () => {
         library,
       })
       const findings = await run(aspect.detect(ctx))
-      const staleFinding = findings.find((f) => f.message.includes('__test_stale_router__'))
+      const staleFinding = findings.find((f) => f.message.includes(routerName))
       if (staleFinding) {
         expect(staleFinding.aspect).toBe('stale-router')
         expect(staleFinding.fixable).toBe(true)
@@ -2240,7 +2242,7 @@ describe('stale-router with real outfit', () => {
 
   test('ignores real core skills that share a library namespace', async () => {
     const outfitPath = Lib.outfitDir('user')
-    const skillName = '__test_stale_router_core_skill__'
+    const skillName = 'test-stale-router-core-skill'
     const skillDir = path.join(outfitPath, skillName)
     const libRouterDir = path.join(Lib.LIBRARY_DIR, skillName, 'child')
 
@@ -2279,22 +2281,23 @@ describe('new-leaf fix execution', () => {
 
   test('fix creates symlink for new leaf', async () => {
     const libDir = Lib.LIBRARY_DIR
-    const skillDir = path.join(libDir, '__test_new_leaf_grp__/new-child')
-    const existingSkillDir = path.join(libDir, '__test_new_leaf_grp__/existing-child')
+    const groupName = 'test-new-leaf-grp'
+    const skillDir = path.join(libDir, groupName, 'new-child')
+    const existingSkillDir = path.join(libDir, groupName, 'existing-child')
     const outfitPath = Lib.outfitDir('user')
-    const existingLink = path.join(outfitPath, '__test_new_leaf_grp___existing-child')
-    const newLink = path.join(outfitPath, '__test_new_leaf_grp___new-child')
+    const existingLink = path.join(outfitPath, `${groupName}_existing-child`)
+    const newLink = path.join(outfitPath, `${groupName}_new-child`)
     try {
       // Create library skills
       await mkdir(skillDir, { recursive: true })
       await writeFile(
         path.join(skillDir, 'SKILL.md'),
-        '---\nname: "__test_new_leaf_grp__:new-child"\ndescription: "new"\n---\n',
+        `---\nname: "${groupName}:new-child"\ndescription: "new"\n---\n`,
       )
       await mkdir(existingSkillDir, { recursive: true })
       await writeFile(
         path.join(existingSkillDir, 'SKILL.md'),
-        '---\nname: "__test_new_leaf_grp__:existing-child"\ndescription: "existing"\n---\n',
+        `---\nname: "${groupName}:existing-child"\ndescription: "existing"\n---\n`,
       )
       // Create existing sibling symlink in outfit
       await mkdir(outfitPath, { recursive: true })
@@ -2307,9 +2310,7 @@ describe('new-leaf fix execution', () => {
         userOutfit: outfit,
       })
       const findings = await run(aspect.detect(ctx))
-      const newLeafFinding = findings.find((f) =>
-        f.message.includes('__test_new_leaf_grp__:new-child'),
-      )
+      const newLeafFinding = findings.find((f) => f.message.includes(`${groupName}:new-child`))
       if (newLeafFinding) {
         expect(newLeafFinding.fixable).toBe(true)
         const fixResult = await run(newLeafFinding.fix!())
@@ -2326,7 +2327,7 @@ describe('new-leaf fix execution', () => {
       } catch {
         /* */
       }
-      await rm(path.join(libDir, '__test_new_leaf_grp__'), { recursive: true, force: true })
+      await rm(path.join(libDir, groupName), { recursive: true, force: true })
     }
   })
 })

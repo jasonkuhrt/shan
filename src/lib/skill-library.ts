@@ -1602,10 +1602,10 @@ export const restoreSnapshot = (
 
       if (!exists) {
         // Reverse-resolve: symlink name → library path (scope-safe — no cross-scope fallthrough)
-        // Try literal name first (handles skills with underscores like "cc_test_ping"),
-        // then unflatten (handles nested skills like "ts_tooling" → "ts/tooling").
+        // Prefer the canonical unflattened path first, then fall back to the literal
+        // name for invalid legacy directories that still need cleanup.
         const libDir = scopeLibraryDir(scope)
-        const candidates = [name, unflattenName(name)]
+        const candidates = [unflattenName(name), name]
         let resolved = false
         for (const candidate of candidates) {
           const libPath = path.join(libDir, candidate)

@@ -67,6 +67,12 @@ describe('skillsCreate', () => {
     )
   })
 
+  test('fails with invalid name (underscore inside a segment)', async () => {
+    await expect(run(skillsCreate('bad_name', { scope: 'project' }))).rejects.toThrow(
+      'Missing targets',
+    )
+  })
+
   test('fails when skill already exists', async () => {
     await run(skillsCreate('existing', { scope: 'project' }))
     await expect(run(skillsCreate('existing', { scope: 'project' }))).rejects.toThrow(

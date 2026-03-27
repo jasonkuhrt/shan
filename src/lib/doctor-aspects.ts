@@ -443,7 +443,6 @@ export const classifyMismatch = (
   fmName: string,
   namespaceCensus: Map<string, number>,
 ): MismatchClassification => {
-  const dirName = SkillName.parseFrontmatterName(dirColonName)
   const frontmatterName = SkillName.parseFrontmatterName(fmName)
 
   // SEPARATOR_ONLY: same string after stripping all separators, AND both names
@@ -451,10 +450,8 @@ export const classifyMismatch = (
   // same namespace, not introducing a new colon-delimited level from scratch).
   if (
     stripSeparators(dirColonName) === stripSeparators(fmName) &&
-    dirName &&
-    frontmatterName &&
-    SkillName.isNamespaced(dirName) &&
-    SkillName.isNamespaced(frontmatterName)
+    dirColonName.includes(':') &&
+    fmName.includes(':')
   ) {
     return 'separator_only'
   }

@@ -2,9 +2,9 @@
  * Migration: ~/.claude/skill-inventory/ (flat) → ~/.claude/skills-library/ (hierarchical)
  *
  * Algorithm:
- * 1. Split name on first underscore: ts_tooling → group "ts", leaf "tooling"
+ * 1. Split name on underscores: ts_tooling → group "ts", leaf "tooling"
  * 2. Names without underscores stay at root: git → skills-library/git/
- * 3. Names with underscores become nested: cc_authoring → skills-library/cc/authoring/
+ * 3. Names with underscores become nested: cc_tips_advanced → skills-library/cc/tips/advanced/
  * 4. Update all symlinks in ~/.claude/skills/ to point to new locations
  * 5. Delete skill-inventory/ and skill-loadouts.yml after migration
  *
@@ -51,13 +51,17 @@ interface MigrationPlan {
 }
 
 /**
- * Split an inventory name on the first underscore to determine hierarchy.
+ * Split an inventory name on underscores to determine hierarchy.
  * Names without underscores stay at root.
  */
 export const splitName = (name: string): { group: string | null; leaf: string } => {
-  const idx = name.indexOf('_')
-  if (idx === -1) return { group: null, leaf: name }
-  return { group: name.slice(0, idx), leaf: name.slice(idx + 1) }
+  const segments = name.split('_')
+  if (segments.length === 1) return { group: null, leaf: name }
+  if (segments.some((segment) => segment.length === 0)) return { group: null, leaf: name }
+
+  const [group, ...rest] = segments
+  if (!group) return { group: null, leaf: name }
+  return { group, leaf: rest.join('/') }
 }
 
 export const skillsMigrate = (options: { execute: boolean }, dirs?: MigrateDirs) =>

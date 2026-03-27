@@ -40,8 +40,12 @@ describe('splitName', () => {
     expect(splitName('cc_authoring')).toEqual({ group: 'cc', leaf: 'authoring' })
   })
 
-  test('multiple underscores → split on first only', () => {
-    expect(splitName('cc_tips_advanced')).toEqual({ group: 'cc', leaf: 'tips_advanced' })
+  test('multiple underscores → nested hierarchy all the way down', () => {
+    expect(splitName('cc_tips_advanced')).toEqual({ group: 'cc', leaf: 'tips/advanced' })
+  })
+
+  test('double underscores remain unmigrated as invalid flat inventory names', () => {
+    expect(splitName('cc__advanced')).toEqual({ group: null, leaf: 'cc__advanced' })
   })
 })
 
@@ -78,6 +82,20 @@ describe('skillsMigrate', () => {
 
     await run(skillsMigrate({ execute: false }, d))
     // Dry-run should NOT create the library
+    await expect(lstat(d.libraryDir)).rejects.toThrow()
+  })
+
+  test('dry-run handles multiple groups in sorted order', async () => {
+    const d = makeDirs('dry-run-multi-group')
+    await mkdir(path.join(d.oldInventoryDir, 'zz_last'), { recursive: true })
+    await writeFile(path.join(d.oldInventoryDir, 'zz_last', 'SKILL.md'), 'test')
+    await mkdir(path.join(d.oldInventoryDir, 'aa_first'), { recursive: true })
+    await writeFile(path.join(d.oldInventoryDir, 'aa_first', 'SKILL.md'), 'test')
+    await mkdir(path.join(d.oldInventoryDir, 'git'), { recursive: true })
+    await writeFile(path.join(d.oldInventoryDir, 'git', 'SKILL.md'), 'test')
+
+    await run(skillsMigrate({ execute: false }, d))
+
     await expect(lstat(d.libraryDir)).rejects.toThrow()
   })
 
@@ -145,5 +163,28 @@ describe('skillsMigrate', () => {
     await run(skillsMigrate({ execute: true }, d))
     const entries = await readdir(d.libraryDir)
     expect(entries).toContain('standalone')
+  })
+
+  test('execute tolerates delete targets that vanish during migration', async () => {
+    const d = makeDirs('missing-delete-target')
+    await mkdir(path.join(d.oldInventoryDir, 'alpha'), { recursive: true })
+    await writeFile(path.join(d.oldInventoryDir, 'alpha', 'SKILL.md'), 'test')
+
+    const nestedLoadouts = path.join(d.oldInventoryDir, 'alpha', 'skill-loadouts.yml')
+    await writeFile(nestedLoadouts, 'loadout: nested\n')
+
+    await run(
+      skillsMigrate(
+        { execute: true },
+        {
+          ...d,
+          oldLoadoutsFile: nestedLoadouts,
+        },
+      ),
+    )
+
+    const entries = await readdir(d.libraryDir)
+    expect(entries).toContain('alpha')
+    await expect(lstat(d.oldInventoryDir)).rejects.toThrow()
   })
 })

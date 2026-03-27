@@ -809,8 +809,8 @@ describe('CC integration', () => {
       const env = await setupTestEnv()
       try {
         // Install a project-level skill via shan
-        await env.addProjectLibrarySkill('cc_test_ping')
-        const onResult = await env.run(['skills', 'on', 'cc_test_ping'])
+        await env.addProjectLibrarySkill('cc:test:ping')
+        const onResult = await env.run(['skills', 'on', 'cc:test:ping'])
         expect(onResult.exitCode).toBe(0)
 
         // Run CC headlessly from the project dir, asking a minimal question
@@ -866,7 +866,7 @@ describe('CC integration', () => {
       await mkdir(path.join(project, '.claude/skills/cc_e2e_test'), { recursive: true })
       await writeFile(
         path.join(project, '.claude/skills/cc_e2e_test/SKILL.md'),
-        skillMd('cc_e2e_test'),
+        skillMd('cc:e2e:test'),
       )
 
       try {
@@ -965,28 +965,24 @@ describe('duplicate target handling', () => {
   })
 })
 
-// ── underscore name handling ──────────────────────────────────────────
+// ── flat underscore namespace encoding ────────────────────────────────
 
-describe('underscore name handling', () => {
-  test('undo correctly restores a skill whose name contains underscores', async () => {
+describe('flat underscore namespace encoding', () => {
+  test('undo correctly restores a namespaced skill via its flat outfit name', async () => {
     const env = await setupTestEnv()
     try {
-      // Skill named with underscores (not colon-separated nesting)
-      await env.addUserLibrarySkill('my_tool')
-      await env.run(['skills', 'on', 'my_tool', '--scope', 'user'])
+      await env.addUserLibrarySkill('my:tool')
+      await env.run(['skills', 'on', 'my:tool', '--scope', 'user'])
 
-      // Verify it's on
       const link = await lstat(path.join(env.userOutfit, 'my_tool'))
       expect(link.isSymbolicLink()).toBe(true)
 
-      // off then undo should restore it
-      await env.run(['skills', 'off', 'my_tool', '--scope', 'user'])
+      await env.run(['skills', 'off', 'my:tool', '--scope', 'user'])
       const gone = await lstat(path.join(env.userOutfit, 'my_tool')).catch(() => null)
       expect(gone).toBeNull()
 
       await env.run(['skills', 'undo', '1', '--scope', 'user'])
 
-      // Should be back — undo must resolve "my_tool" to library/my_tool, not library/my/tool
       const restored = await lstat(path.join(env.userOutfit, 'my_tool'))
       expect(restored.isSymbolicLink()).toBe(true)
     } finally {
@@ -994,17 +990,16 @@ describe('underscore name handling', () => {
     }
   })
 
-  test('list shows correct name for underscore skills', async () => {
+  test('list renders canonical colon names rather than flat outfit names', async () => {
     const env = await setupTestEnv()
     try {
-      await env.addUserLibrarySkill('my_tool')
-      await env.run(['skills', 'on', 'my_tool', '--scope', 'user'])
+      await env.addUserLibrarySkill('my:tool')
+      await env.run(['skills', 'on', 'my:tool', '--scope', 'user'])
 
       const result = await env.run(['skills', 'list'])
       expect(result.exitCode).toBe(0)
-      // Should show "my_tool", not "my:tool"
-      expect(result.stdout).toContain('my_tool')
-      expect(result.stdout).not.toContain('my:tool')
+      expect(result.stdout).toContain('my:tool')
+      expect(result.stdout).not.toContain('● my_tool')
     } finally {
       await env.cleanup()
     }
