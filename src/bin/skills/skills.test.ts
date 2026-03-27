@@ -1418,3 +1418,84 @@ describe('undo/redo gitignore lifecycle', () => {
     }
   })
 })
+
+// ── scope inference symmetry (codex review P2) ──────────────────────
+//
+// resolveSkillsOnScope infers user scope when the target only exists
+// in the user library, but off/undo/redo/history use resolveScope which
+// defaults to project. This means `shan skills on foo` can silently
+// install at user scope, then `shan skills off foo` fails because it
+// looks at project scope.
+
+describe('scope inference symmetry', () => {
+  test('off should find a skill that on auto-inferred to user scope', async () => {
+    const env = await setupTestEnv()
+    try {
+      // Skill exists ONLY in user library — no project library entry
+      await env.addUserLibrarySkill('inferred-user')
+
+      // on with no --scope flag → resolveSkillsOnScope should infer user
+      const onResult = await env.run(['skills', 'on', 'inferred-user'])
+      expect(onResult.exitCode).toBe(0)
+
+      // Verify it landed in user outfit
+      const userLink = path.join(env.userOutfit, 'inferred-user')
+      const stat = await lstat(userLink)
+      expect(stat.isSymbolicLink()).toBe(true)
+
+      // off with no --scope flag → should also find it at user scope
+      // BUG: resolveScope defaults to project, so this fails with "not found"
+      const offResult = await env.run(['skills', 'off', 'inferred-user'])
+      expect(offResult.exitCode).toBe(0)
+
+      // Skill should actually be removed
+      const gone = await lstat(userLink).catch(() => null)
+      expect(gone).toBeNull()
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('undo should reverse a skill that on auto-inferred to user scope', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('inferred-undo')
+
+      // on infers user scope
+      const onResult = await env.run(['skills', 'on', 'inferred-undo'])
+      expect(onResult.exitCode).toBe(0)
+
+      const userLink = path.join(env.userOutfit, 'inferred-undo')
+      expect((await lstat(userLink)).isSymbolicLink()).toBe(true)
+
+      // undo with no --scope flag → should undo at user scope
+      // BUG: resolveScope defaults to project, so undo looks at project history
+      const undoResult = await env.run(['skills', 'undo'])
+      expect(undoResult.exitCode).toBe(0)
+
+      // Skill should be removed by undo
+      const gone = await lstat(userLink).catch(() => null)
+      expect(gone).toBeNull()
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('history should show operations from auto-inferred user scope', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('inferred-hist')
+
+      // on infers user scope
+      await env.run(['skills', 'on', 'inferred-hist'])
+
+      // history with no --scope flag → should show the user-scope operation
+      // BUG: resolveScope defaults to project, so history shows project history (empty)
+      const histResult = await env.run(['skills', 'history'])
+      expect(histResult.exitCode).toBe(0)
+      expect(histResult.stdout).toContain('inferred-hist')
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
