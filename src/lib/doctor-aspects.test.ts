@@ -54,7 +54,7 @@ const makeContext = (overrides: Partial<Aspects.DoctorContext> = {}): Aspects.Do
 
 describe('ALL_ASPECTS', () => {
   test('exports all aspects', () => {
-    expect(Aspects.ALL_ASPECTS.length).toBe(14)
+    expect(Aspects.ALL_ASPECTS.length).toBe(15)
   })
   test('each aspect has required fields', () => {
     for (const aspect of Aspects.ALL_ASPECTS) {
@@ -588,6 +588,58 @@ describe('buildNamespaceCensus', () => {
   })
 })
 
+// ── corrupt-library-entry ─────────────────────────────────────────
+
+describe('corrupt-library-entry aspect', () => {
+  const corruptAspect = Aspects.ALL_ASPECTS.find((a) => a.name === 'corrupt-library-entry')!
+  const mismatchAspect = Aspects.ALL_ASPECTS.find((a) => a.name === 'frontmatter-mismatch')!
+
+  test('deterministically repairable underscore frontmatter names are fixable corruption, not mismatches', async () => {
+    const ctx = makeContext({
+      library: [
+        {
+          colonName: 'skills:change:undo',
+          libraryRelPath: 'skills/change/undo',
+          libraryDir: '/lib',
+          libraryScope: 'user',
+          frontmatter: { name: 'skills:change_undo', description: 'desc' },
+        },
+      ],
+    })
+
+    const corruptFindings = await run(corruptAspect.detect(ctx))
+    const mismatchFindings = await run(mismatchAspect.detect(ctx))
+
+    expect(corruptFindings).toHaveLength(1)
+    expect(corruptFindings[0]!.fixable).toBe(true)
+    expect(corruptFindings[0]!.message).toContain('invalid canonical skill name on disk')
+    expect(corruptFindings[0]!.message).toContain(
+      'will rewrite frontmatter name to "skills:change:undo"',
+    )
+    expect(mismatchFindings).toEqual([])
+  })
+
+  test('structurally broken invalid frontmatter names stay non-fixable', async () => {
+    const ctx = makeContext({
+      library: [
+        {
+          colonName: 'skills:change',
+          libraryRelPath: 'skills/change',
+          libraryDir: '/lib',
+          libraryScope: 'user',
+          frontmatter: { name: 'skills::change', description: 'desc' },
+        },
+      ],
+    })
+
+    const corruptFindings = await run(corruptAspect.detect(ctx))
+
+    expect(corruptFindings).toHaveLength(1)
+    expect(corruptFindings[0]!.fixable).toBe(false)
+    expect(corruptFindings[0]!.message).not.toContain('will rewrite frontmatter name')
+  })
+})
+
 // ── frontmatter-mismatch ──────────────────────────────────────────
 
 describe('frontmatter-mismatch aspect', () => {
@@ -885,6 +937,47 @@ describe('frontmatter-mismatch fix action', () => {
       expect(findings).toHaveLength(1)
       // Fix should fail because target exists
       await expect(run(findings[0]!.fix!())).rejects.toThrow()
+    } finally {
+      await rm(libDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('corrupt-library-entry fix action', () => {
+  const aspect = Aspects.ALL_ASPECTS.find((a) => a.name === 'corrupt-library-entry')!
+
+  test('fix rewrites underscore-encoded frontmatter names to canonical colon form', async () => {
+    const libDir = path.join(tmpBase, 'corrupt-fix-lib')
+    const skillDir = path.join(libDir, 'skills', 'change', 'undo')
+    try {
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: skills:change_undo\ndescription: desc\n---\ntest',
+      )
+
+      const ctx = makeContext({
+        library: [
+          {
+            colonName: 'skills:change:undo',
+            libraryRelPath: 'skills/change/undo',
+            libraryDir: libDir,
+            libraryScope: 'user',
+            frontmatter: { name: 'skills:change_undo', description: 'desc' },
+          },
+        ],
+      })
+
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toHaveLength(1)
+      expect(findings[0]!.fixable).toBe(true)
+
+      const desc = await run(findings[0]!.fix!())
+      expect(desc).toContain('rewrote frontmatter name')
+
+      const content = await readFile(path.join(skillDir, 'SKILL.md'), 'utf-8')
+      expect(content).toContain('name: "skills:change:undo"')
+      expect(content).not.toContain('name: skills:change_undo')
     } finally {
       await rm(libDir, { recursive: true, force: true })
     }

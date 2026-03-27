@@ -66,4 +66,37 @@ describe('skill-name codecs', () => {
     })
     expect(SkillName.toFrontmatterName(name)).toBe('my:tool')
   })
+
+  test('observed library paths treat underscores as namespace separators too', () => {
+    const name = SkillName.parseObservedLibraryRelPath('devin_review')
+    expect(name).toEqual({
+      namespace: ['devin'],
+      leaf: 'review',
+    })
+    expect(name && SkillName.toFrontmatterName(name)).toBe('devin:review')
+  })
+
+  test('observed library paths collapse slash and underscore legacy namespace forms', () => {
+    const name = SkillName.parseObservedLibraryRelPath('skills/change_undo')
+    expect(name).toEqual({
+      namespace: ['skills', 'change'],
+      leaf: 'undo',
+    })
+    expect(name && SkillName.toFrontmatterName(name)).toBe('skills:change:undo')
+  })
+
+  test('observed frontmatter names treat underscores as namespace separators for repair', () => {
+    const name = SkillName.parseObservedFrontmatterName('skills:change_undo')
+    expect(name).toEqual({
+      namespace: ['skills', 'change'],
+      leaf: 'undo',
+    })
+    expect(name && SkillName.toFrontmatterName(name)).toBe('skills:change:undo')
+  })
+
+  test('observed frontmatter names reject structurally broken separator patterns', () => {
+    expect(SkillName.parseObservedFrontmatterName('skills::change')).toBeNull()
+    expect(SkillName.parseObservedFrontmatterName('skills__change')).toBeNull()
+    expect(SkillName.parseObservedFrontmatterName('_private:skill')).toBeNull()
+  })
 })

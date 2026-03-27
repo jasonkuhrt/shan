@@ -1504,59 +1504,68 @@ describe('scope inference symmetry', () => {
   })
 })
 
-// ── legacy underscore-encoded skill names (codex review P1) ─────────
-//
-// colonToPath now uses SkillName.fromFrontmatterName which throws on
-// legacy underscore-encoded names like "devin_review". These exist in
-// real user libraries and persisted state.json history.
+// ── invalid underscore canonical skill names ────────────────────────
 
-describe('legacy underscore skill names', () => {
-  test('off should handle a skill whose library dir uses underscores', async () => {
+describe('invalid underscore canonical skill names', () => {
+  test('on rejects a skill whose frontmatter name uses underscores', async () => {
     const env = await setupTestEnv()
     try {
-      // Simulate a legacy library entry: underscore-encoded dir name
-      const legacyDir = path.join(env.userLibrary, 'devin_review')
-      await mkdir(legacyDir, { recursive: true })
+      const invalidDir = path.join(env.userLibrary, 'devin_review')
+      await mkdir(invalidDir, { recursive: true })
       await writeFile(
-        path.join(legacyDir, 'SKILL.md'),
+        path.join(invalidDir, 'SKILL.md'),
         '---\nname: devin_review\ndescription: Legacy skill\n---\n# devin_review\n',
       )
 
-      // Install it — uses the colon name devin:review which maps to devin/review,
-      // but the library entry is at devin_review (flat). The on command should
-      // resolve this via library scanning.
       const onResult = await env.run(['skills', 'on', 'devin_review', '--scope', 'user'])
-      expect(onResult.exitCode).toBe(0)
+      expect(onResult.exitCode).not.toBe(0)
+      expect(onResult.stdout + onResult.stderr).toContain('devin_review')
 
-      // Off should be able to find and remove it
       const offResult = await env.run(['skills', 'off', 'devin_review', '--scope', 'user'])
-      expect(offResult.exitCode).toBe(0)
+      expect(offResult.exitCode).not.toBe(0)
+
+      const installed = await lstat(path.join(env.userOutfit, 'devin_review')).catch(() => null)
+      expect(installed).toBeNull()
     } finally {
       await env.cleanup()
     }
   })
 
-  test('redo should work with persisted history containing underscore targets', async () => {
+  test('redo skips persisted history targets that are not valid canonical skill names', async () => {
     const env = await setupTestEnv()
     try {
-      // Create a skill with legacy underscore name in library
-      const legacyDir = path.join(env.projectLibrary, 'my_tool')
-      await mkdir(legacyDir, { recursive: true })
-      await writeFile(
-        path.join(legacyDir, 'SKILL.md'),
-        '---\nname: my_tool\ndescription: Legacy skill\n---\n# my_tool\n',
-      )
+      await env.addUserLibrarySkill('my:tool')
 
-      // Install, undo, then redo — redo replays stored targets through colonToPath
-      const onResult = await env.run(['skills', 'on', 'my_tool'])
+      const onResult = await env.run(['skills', 'on', 'my:tool', '--scope', 'user'])
       expect(onResult.exitCode).toBe(0)
 
-      const undoResult = await env.run(['skills', 'undo'])
+      const undoResult = await env.run(['skills', 'undo', '--scope', 'user'])
       expect(undoResult.exitCode).toBe(0)
 
-      // Redo should not throw ParseError from colonToPath
-      const redoResult = await env.run(['skills', 'redo'])
+      const statePath = path.join(env.home, '.claude/shan/state.json')
+      const state = JSON.parse(await readFile(statePath, 'utf-8')) as {
+        history?: Record<
+          string,
+          { entries: Array<{ _tag: string; targets?: string[] }>; undoneCount: number }
+        >
+      }
+      const history = state.history?.['global']
+      expect(history).toBeTruthy()
+      if (!history) throw new Error('expected global history')
+      const lastEntry = history.entries.at(-1)
+      expect(lastEntry?._tag).toBe('OnOp')
+      if (!lastEntry?.targets) throw new Error('expected OnOp targets')
+      lastEntry.targets = ['my_tool']
+      await writeFile(statePath, JSON.stringify(state))
+
+      const redoResult = await env.run(['skills', 'redo', '--scope', 'user'])
       expect(redoResult.exitCode).toBe(0)
+      expect(redoResult.stdout + redoResult.stderr).toContain(
+        'warn: skipping invalid history target: my_tool',
+      )
+
+      const restored = await lstat(path.join(env.userOutfit, 'my_tool')).catch(() => null)
+      expect(restored).toBeNull()
     } finally {
       await env.cleanup()
     }

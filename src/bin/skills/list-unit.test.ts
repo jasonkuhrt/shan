@@ -99,6 +99,58 @@ describe('skillsList', () => {
     await run(skillsList())
   })
 
+  test('renders legacy flat library dirs in canonical colon form', async () => {
+    const output: string[] = []
+    const origLog = console.log
+    const canonicalName = 'zzlegacy:test-entry'
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(' '))
+    }
+
+    try {
+      const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+      const skillDir = path.join(libDir, 'zzlegacy_test-entry')
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: "zzlegacy:test-entry"\ndescription: Test skill zzlegacy:test-entry\n---\n# zzlegacy:test-entry\n',
+      )
+
+      await run(skillsList())
+    } finally {
+      console.log = origLog
+    }
+
+    expect(output.join('\n')).toContain('zzlegacy: test-entry')
+    expect(output.join('\n')).not.toContain(canonicalName.replace(':', '_'))
+  })
+
+  test('does not render corrupted library entries as off skills', async () => {
+    const output: string[] = []
+    const origLog = console.log
+    const corruptDisplayName = 'zzcorrupt:test-entry'
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(' '))
+    }
+
+    try {
+      const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+      const skillDir = path.join(libDir, 'zzcorrupt_test-entry')
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: "zzcorrupt_test-entry"\ndescription: Test skill zzcorrupt_test-entry\n---\n# zzcorrupt_test-entry\n',
+      )
+
+      await run(skillsList())
+    } finally {
+      console.log = origLog
+    }
+
+    expect(output.join('\n')).not.toContain(corruptDisplayName)
+    expect(output.join('\n')).not.toContain('  zzcorrupt_test-entry')
+  })
+
   test('respects SLASH_COMMAND_TOOL_CHAR_BUDGET', async () => {
     const origBudget = process.env['SLASH_COMMAND_TOOL_CHAR_BUDGET']
     process.env['SLASH_COMMAND_TOOL_CHAR_BUDGET'] = '50000'

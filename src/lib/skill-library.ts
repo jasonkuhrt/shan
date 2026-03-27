@@ -1161,6 +1161,18 @@ export const flattenName = (relPath: string): string =>
 export const unflattenName = (flatName: string): string =>
   SkillName.toLibraryRelPath(SkillName.fromFlatName(flatName))
 
+export const resolveCanonicalTargetPaths = (
+  target: string,
+): { readonly flatName: string; readonly relPath: string } | null => {
+  const parsed = SkillName.parseFrontmatterName(target)
+  if (!parsed) return null
+
+  return {
+    flatName: SkillName.toFlatName(parsed),
+    relPath: SkillName.toLibraryRelPath(parsed),
+  }
+}
+
 const legacyLibraryRelPathCandidates = (flatName: string): readonly string[] => {
   const parsed = SkillName.parseFlatName(flatName)
   return parsed ? [SkillName.toLibraryRelPath(parsed), flatName] : [flatName]
@@ -1178,6 +1190,21 @@ const observedColonNameFromLibraryRelPath = (relPath: string): string => {
 export const observedFlatNameFromLibraryRelPath = (relPath: string): string => {
   const parsed = SkillName.parseObservedLibraryRelPath(relPath)
   return parsed ? SkillName.toFlatName(parsed) : legacyObservedFlatName(relPath)
+}
+
+export const canonicalFrontmatterName = (
+  frontmatter: SkillFrontmatter | null | undefined,
+): string | null => {
+  if (!frontmatter) return null
+  const parsed = SkillName.parseFrontmatterName(frontmatter.name)
+  return parsed ? SkillName.toFrontmatterName(parsed) : null
+}
+
+export const isAdmissibleLibrarySkill = (
+  skill: Pick<SkillInfo, 'colonName' | 'frontmatter'>,
+): boolean => {
+  const canonicalName = canonicalFrontmatterName(skill.frontmatter)
+  return canonicalName !== null && canonicalName === skill.colonName
 }
 
 // ── Frontmatter parsing ────────────────────────────────────────────
@@ -1311,45 +1338,46 @@ export const resolveTarget = (colonName: string, scope: Scope = 'project', stric
       // For leaf skills, the leaves array is just the skill itself
       if (nodeType === 'leaf') {
         const fm = yield* readFrontmatter(libraryPath)
-        return {
+        const resolvedLeaf: SkillInfo = {
+          colonName,
+          libraryRelPath: relPath,
+          libraryDir: libDir,
+          libraryScope: libScope,
+          frontmatter: fm,
+        }
+        const leaf = {
           colonName,
           libraryPath,
           libraryDir: libDir,
           libraryScope: libScope,
           nodeType,
-          leaves: [
-            {
-              colonName,
-              libraryRelPath: relPath,
-              libraryDir: libDir,
-              libraryScope: libScope,
-              frontmatter: fm,
-            },
-          ],
+          leaves: [resolvedLeaf],
         } as ResolvedTarget
+        return isAdmissibleLibrarySkill(resolvedLeaf) ? leaf : null
       }
 
       const leaves = yield* resolveLeaves(relPath, libDir)
+      if (!leaves.every(isAdmissibleLibrarySkill)) return null
 
       // For callable groups, include the group's own SKILL.md as a leaf
       if (nodeType === 'callable-group') {
         const fm = yield* readFrontmatter(libraryPath)
+        const ownLeaf: SkillInfo = {
+          colonName,
+          libraryRelPath: relPath,
+          libraryDir: libDir,
+          libraryScope: libScope,
+          frontmatter: fm,
+        }
+        if (!isAdmissibleLibrarySkill(ownLeaf)) return null
+
         return {
           colonName,
           libraryPath,
           libraryDir: libDir,
           libraryScope: libScope,
           nodeType,
-          leaves: [
-            {
-              colonName,
-              libraryRelPath: relPath,
-              libraryDir: libDir,
-              libraryScope: libScope,
-              frontmatter: fm,
-            },
-            ...leaves,
-          ],
+          leaves: [ownLeaf, ...leaves],
         } as ResolvedTarget
       }
 

@@ -7,6 +7,8 @@ const args = coverage
   ? [
       'test',
       '--coverage',
+      // Coverage runs share global shan state fixtures, so serialize them for deterministic lcov output.
+      '--max-concurrency=1',
       '--coverage-reporter=text',
       '--coverage-reporter=lcov',
       '--coverage-dir=coverage',

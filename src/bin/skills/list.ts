@@ -49,9 +49,12 @@ export const skillsList = () =>
       ...userPluggable.map((e) => e.name),
       ...projectPluggable.map((e) => e.name),
     ])
-    const libraryOff = library.filter((s) => {
-      const flatName = Lib.flattenName(s.libraryRelPath)
-      return !allOnNames.has(flatName)
+    const libraryOff = library.flatMap((skill) => {
+      const canonicalName = Lib.canonicalFrontmatterName(skill.frontmatter)
+      if (!canonicalName || canonicalName !== skill.colonName) return []
+
+      const flatName = Lib.observedFlatNameFromLibraryRelPath(skill.libraryRelPath)
+      return allOnNames.has(flatName) ? [] : [canonicalName]
     })
 
     const readDisplayName = (skillDir: string, fallbackName: string) =>
@@ -114,7 +117,7 @@ export const skillsList = () =>
     // Off
     if (libraryOff.length > 0) {
       yield* Console.log('Off:')
-      yield* printGrouped(libraryOff.map((s) => s.colonName))
+      yield* printGrouped(libraryOff)
       yield* Console.log('')
     }
 

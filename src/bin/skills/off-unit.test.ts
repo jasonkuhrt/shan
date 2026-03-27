@@ -248,7 +248,7 @@ describe('skillsOff', () => {
   })
 
   test('cleanupRouter can resolve a legacy project install from the user library', async () => {
-    const groupName = `__legacy_router_${Date.now()}__`
+    const groupName = `legacy-router-${Date.now()}`
     const userGroupLeafDir = path.join(Lib.LIBRARY_DIR, groupName, 'child')
     const projectLibraryDir = path.join(TEMP_DIR, '.claude', 'skills-library')
     const projectOutfitDir = path.join(TEMP_DIR, '.claude', 'skills')

@@ -89,7 +89,13 @@ const undoSubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> => {
   if (sub._tag === 'OnOp') {
     return Effect.gen(function* () {
       for (const target of sub.targets) {
-        const flatName = Lib.flattenName(Lib.colonToPath(target))
+        const targetPaths = Lib.resolveCanonicalTargetPaths(target)
+        if (!targetPaths) {
+          yield* Console.error(`  warn: skipping invalid history target: ${target}`)
+          continue
+        }
+
+        const { flatName } = targetPaths
         const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
         yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
@@ -102,8 +108,13 @@ const undoSubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> => {
       const scope = Lib.resolveHistoryScope(sub.scope)
       const libDir = Lib.scopeLibraryDir(scope)
       for (const target of sub.targets) {
-        const flatName = Lib.flattenName(Lib.colonToPath(target))
-        const relPath = Lib.colonToPath(target)
+        const targetPaths = Lib.resolveCanonicalTargetPaths(target)
+        if (!targetPaths) {
+          yield* Console.error(`  warn: skipping invalid history target: ${target}`)
+          continue
+        }
+
+        const { flatName, relPath } = targetPaths
         const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
         const libPath = path.join(libDir, relPath)

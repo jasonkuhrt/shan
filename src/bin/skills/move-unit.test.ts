@@ -140,7 +140,7 @@ describe('skillsMove', () => {
 
     await expect(
       run(
-        skillsMove('scope', 'down', '__nonexistent_user_skill__', {
+        skillsMove('scope', 'down', 'nonexistent-user-skill', {
           scope: 'project',
           strict: true,
         }),
@@ -295,9 +295,7 @@ describe('skillsMove', () => {
     await setupProjectLibrary('__placeholder__')
 
     try {
-      await run(
-        skillsMove('scope', 'down', 'core-scope-down', { scope: 'project', strict: false }),
-      )
+      await run(skillsMove('scope', 'down', 'core-scope-down', { scope: 'project', strict: false }))
       // After scope down: should be at project outfit
       const projectPath = path.join(TEMP_DIR, '.claude', 'skills', 'core-scope-down')
       const stat = await lstat(projectPath)

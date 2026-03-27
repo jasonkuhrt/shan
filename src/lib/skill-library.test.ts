@@ -106,6 +106,24 @@ describe('listLibrary', () => {
     const results = await run(Lib.listLibrary(['/nonexistent/path']))
     expect(results).toEqual([])
   })
+
+  test('canonicalizes legacy flat directory names to colon display names', async () => {
+    const userLib = path.join(tmpBase, 'user-lib-legacy-flat')
+    try {
+      await createSkill(
+        userLib,
+        'devin_review',
+        '---\nname: "devin:review"\ndescription: "Test skill devin:review"\n---\nTest skill',
+      )
+
+      const results = await run(Lib.listLibrary([userLib]))
+      const names = results.map((r) => r.colonName)
+      expect(names).toContain('devin:review')
+      expect(names).not.toContain('devin_review')
+    } finally {
+      await rm(userLib, { recursive: true, force: true })
+    }
+  })
 })
 
 // ── Name translation ──────────────────────────────────────────────
@@ -121,8 +139,8 @@ describe('colonToPath', () => {
     expect(Lib.colonToPath('a:b:c')).toBe('a/b/c')
   })
 
-  test('falls back to raw replacement for invalid colon names', () => {
-    expect(Lib.colonToPath('a::c')).toBe('a//c')
+  test('rejects invalid colon names', () => {
+    expect(() => Lib.colonToPath('a::c')).toThrow()
   })
 })
 
@@ -134,8 +152,8 @@ describe('pathToColon', () => {
     expect(Lib.pathToColon('alpha')).toBe('alpha')
   })
 
-  test('falls back to raw replacement for invalid library paths', () => {
-    expect(Lib.pathToColon('a/$/c')).toBe('a:$:c')
+  test('rejects invalid library paths', () => {
+    expect(() => Lib.pathToColon('a/$/c')).toThrow()
   })
 })
 
@@ -147,8 +165,61 @@ describe('flattenName', () => {
     expect(Lib.flattenName('alpha')).toBe('alpha')
   })
 
-  test('falls back to raw replacement for invalid library paths', () => {
-    expect(Lib.flattenName('a/$/c')).toBe('a_$_c')
+  test('rejects invalid library paths', () => {
+    expect(() => Lib.flattenName('a/$/c')).toThrow()
+  })
+})
+
+describe('observedFlatNameFromLibraryRelPath', () => {
+  test('uses canonical flat encoding for valid library paths', () => {
+    expect(Lib.observedFlatNameFromLibraryRelPath('ts/tooling')).toBe('ts_tooling')
+  })
+
+  test('preserves legacy invalid library paths for read-only observation', () => {
+    expect(Lib.observedFlatNameFromLibraryRelPath('devin_review')).toBe('devin_review')
+  })
+})
+
+describe('canonicalFrontmatterName', () => {
+  test('returns canonical names for valid frontmatter', () => {
+    expect(Lib.canonicalFrontmatterName({ name: 'skills:doctor', description: 'test' })).toBe(
+      'skills:doctor',
+    )
+  })
+
+  test('returns null for invalid canonical frontmatter names', () => {
+    expect(
+      Lib.canonicalFrontmatterName({ name: 'skills_doctor', description: 'broken metadata' }),
+    ).toBeNull()
+  })
+})
+
+describe('isAdmissibleLibrarySkill', () => {
+  test('accepts skills whose canonical frontmatter matches their observed name', () => {
+    expect(
+      Lib.isAdmissibleLibrarySkill({
+        colonName: 'skills:doctor',
+        frontmatter: { name: 'skills:doctor', description: 'test' },
+      }),
+    ).toBe(true)
+  })
+
+  test('rejects skills with invalid canonical frontmatter names', () => {
+    expect(
+      Lib.isAdmissibleLibrarySkill({
+        colonName: 'skills:doctor',
+        frontmatter: { name: 'skills_doctor', description: 'broken metadata' },
+      }),
+    ).toBe(false)
+  })
+
+  test('rejects skills whose canonical frontmatter points at another name', () => {
+    expect(
+      Lib.isAdmissibleLibrarySkill({
+        colonName: 'tips',
+        frontmatter: { name: 'cc:tips', description: 'mismatch' },
+      }),
+    ).toBe(false)
   })
 })
 
@@ -160,8 +231,8 @@ describe('unflattenName', () => {
     expect(Lib.unflattenName('alpha')).toBe('alpha')
   })
 
-  test('leaves invalid flat names unchanged', () => {
-    expect(Lib.unflattenName('a__c')).toBe('a__c')
+  test('rejects invalid flat names', () => {
+    expect(() => Lib.unflattenName('a__c')).toThrow()
   })
 })
 
@@ -2092,7 +2163,11 @@ describe('resolveTarget', () => {
     const origCwd = process.cwd()
     try {
       await rm(projectRoot, { recursive: true, force: true })
-      await createSkill(path.join(projectRoot, '.claude', 'skills-library'), 'rt-skill')
+      await createSkill(
+        path.join(projectRoot, '.claude', 'skills-library'),
+        'rt-skill',
+        '---\nname: rt-skill\ndescription: rt\n---\n',
+      )
       process.chdir(projectRoot)
       const result = await run(Lib.resolveTarget('rt-skill', 'project', true))
       expect(result).not.toBeNull()
@@ -3473,18 +3548,69 @@ describe('printSlashCommandNotice', () => {
 // ── resolveTarget with non-strict and groups ────────────────────────
 
 describe('resolveTarget advanced', () => {
+  test('rejects leaf targets whose canonical frontmatter is corrupt', async () => {
+    const projectRoot = path.join(tmpBase, 'resolve-target-corrupt-leaf')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+      await mkdir(path.join(libPath, 'bad-skill'), { recursive: true })
+      await writeFile(
+        path.join(libPath, 'bad-skill', 'SKILL.md'),
+        '---\nname: bad_skill\ndescription: Broken\n---\n',
+      )
+
+      process.chdir(projectRoot)
+      const result = await run(Lib.resolveTarget('bad-skill', 'project', true))
+      expect(result).toBeNull()
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
   test('resolves a group target', async () => {
     const projectRoot = path.join(tmpBase, 'resolve-target-group')
     const origCwd = process.cwd()
     try {
       await rm(projectRoot, { recursive: true, force: true })
       const libPath = path.join(projectRoot, '.claude', 'skills-library')
-      await createSkill(libPath, path.join('mygroup', 'child'))
+      await createSkill(
+        libPath,
+        path.join('mygroup', 'child'),
+        '---\nname: mygroup:child\ndescription: child\n---\n',
+      )
       process.chdir(projectRoot)
       const result = await run(Lib.resolveTarget('mygroup', 'project', true))
       expect(result).not.toBeNull()
       expect(result!.nodeType).toBe('group')
       expect(result!.leaves.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      process.chdir(origCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects groups when any descendant leaf has corrupt canonical frontmatter', async () => {
+    const projectRoot = path.join(tmpBase, 'resolve-target-group-corrupt-child')
+    const origCwd = process.cwd()
+    try {
+      await rm(projectRoot, { recursive: true, force: true })
+      const libPath = path.join(projectRoot, '.claude', 'skills-library')
+      await createSkill(
+        libPath,
+        path.join('mygroup', 'good'),
+        '---\nname: mygroup:good\ndescription: good\n---\n',
+      )
+      await createSkill(
+        libPath,
+        path.join('mygroup', 'bad'),
+        '---\nname: mygroup_bad\ndescription: bad\n---\n',
+      )
+
+      process.chdir(projectRoot)
+      const result = await run(Lib.resolveTarget('mygroup', 'project', true))
+      expect(result).toBeNull()
     } finally {
       process.chdir(origCwd)
       await rm(projectRoot, { recursive: true, force: true })
@@ -3498,7 +3624,11 @@ describe('resolveTarget advanced', () => {
       await rm(projectRoot, { recursive: true, force: true })
       const libPath = path.join(projectRoot, '.claude', 'skills-library')
       // Create group with its own SKILL.md + a child
-      await createSkill(libPath, path.join('cgroup', 'child'))
+      await createSkill(
+        libPath,
+        path.join('cgroup', 'child'),
+        '---\nname: cgroup:child\ndescription: child\n---\n',
+      )
       await writeFile(
         path.join(libPath, 'cgroup', 'SKILL.md'),
         '---\nname: cgroup\ndescription: Callable group\n---\n',

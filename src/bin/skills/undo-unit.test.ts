@@ -39,6 +39,43 @@ const setupProjectLibrary = async (...skills: string[]) => {
 
 const STATE_FILE = path.join(homedir(), '.claude', 'shan', 'state.json')
 
+const withSavedState = async (runTest: () => Promise<void>) => {
+  const stateContent = await readFile(STATE_FILE, 'utf-8').catch(() => '{}')
+  try {
+    await runTest()
+  } finally {
+    if (stateContent === '{}') {
+      await rm(STATE_FILE, { force: true })
+      return
+    }
+    await mkdir(path.dirname(STATE_FILE), { recursive: true })
+    await writeFile(STATE_FILE, stateContent)
+  }
+}
+
+const writeProjectHistory = async (
+  entry: Record<string, unknown>,
+  undoneCount: number,
+  savedState: Record<string, unknown>,
+) => {
+  const historyKey = process.cwd()
+  const state = {
+    ...savedState,
+    version: 2,
+    history: {
+      ...((savedState.history ?? {}) as Record<string, unknown>),
+      [historyKey]: {
+        entries: [entry],
+        undoneCount,
+      },
+    },
+    current: (savedState.current ?? {}) as Record<string, unknown>,
+  }
+
+  await mkdir(path.dirname(STATE_FILE), { recursive: true })
+  await writeFile(STATE_FILE, JSON.stringify(state, null, 2))
+}
+
 beforeEach(async () => {
   await rm(path.join(TEMP_DIR, '.claude'), { recursive: true, force: true })
   process.chdir(TEMP_DIR)
@@ -241,6 +278,89 @@ describe('skillsUndo', () => {
 
     // Undo → OnOp reverse (remove symlink) fires but symlink already gone → catchAll
     await run(skillsUndo(1, 'project'))
+  })
+
+  test('undoes move on-op sub-actions while skipping invalid canonical targets', async () => {
+    await withSavedState(async () => {
+      const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+      const linkPath = path.join(outfitDir, 'undo-move-on-valid-target')
+      const libPath = path.join(TEMP_DIR, '.claude', 'skills-library', 'undo-move-on-valid-target')
+      await mkdir(libPath, { recursive: true })
+      await writeFile(path.join(libPath, 'SKILL.md'), SKILL_MD('undo-move-on-valid-target'))
+      await mkdir(outfitDir, { recursive: true })
+      await symlink(libPath, linkPath)
+
+      const savedState = JSON.parse(await readFile(STATE_FILE, 'utf-8').catch(() => '{}')) as Record<
+        string,
+        unknown
+      >
+      await writeProjectHistory(
+        {
+          _tag: 'MoveOp',
+          targets: ['undo-move-on-valid-target'],
+          scope: 'project',
+          timestamp: new Date().toISOString(),
+          axis: 'commitment',
+          direction: 'down',
+          subActions: [
+            {
+              _tag: 'OnOp',
+              targets: ['undo-move-on-valid-target', 'undo_move_on_invalid_target'],
+              scope: 'project',
+              timestamp: new Date().toISOString(),
+              snapshot: [],
+              generatedRouters: [],
+            },
+          ],
+        },
+        0,
+        savedState,
+      )
+
+      await run(skillsUndo(1, 'project'))
+
+      const exists = await lstat(linkPath).catch(() => null)
+      expect(exists).toBeNull()
+    })
+  })
+
+  test('undoes move off-op sub-actions while skipping invalid canonical targets', async () => {
+    await withSavedState(async () => {
+      await setupProjectLibrary('undo-move-off-valid-target')
+      const savedState = JSON.parse(await readFile(STATE_FILE, 'utf-8').catch(() => '{}')) as Record<
+        string,
+        unknown
+      >
+      await writeProjectHistory(
+        {
+          _tag: 'MoveOp',
+          targets: ['undo-move-off-valid-target'],
+          scope: 'project',
+          timestamp: new Date().toISOString(),
+          axis: 'commitment',
+          direction: 'up',
+          subActions: [
+            {
+              _tag: 'OffOp',
+              targets: ['undo-move-off-valid-target', 'undo_move_off_invalid_target'],
+              scope: 'project',
+              timestamp: new Date().toISOString(),
+              snapshot: [],
+              generatedRouters: [],
+            },
+          ],
+        },
+        0,
+        savedState,
+      )
+
+      await run(skillsUndo(1, 'project'))
+
+      const stat = await lstat(
+        path.join(TEMP_DIR, '.claude', 'skills', 'undo-move-off-valid-target'),
+      )
+      expect(stat.isSymbolicLink()).toBe(true)
+    })
   })
 
   test('undo warns for DoctorOp entries', async () => {

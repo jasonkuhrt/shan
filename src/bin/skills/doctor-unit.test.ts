@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
@@ -87,6 +87,84 @@ describe('skillsDoctor', () => {
     await symlink('/nonexistent/path', path.join(outfitDir, 'broken-fix'))
 
     await run(skillsDoctor({ noFix: false }))
+  })
+
+  test('auto-fix keeps repairing fixable issues even when corrupt library entries remain', async () => {
+    const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+    const corruptColonName = 'zzcorrupt__test-entry'
+    const corruptDir = path.join(libDir, 'zzcorrupt__test-entry')
+    await mkdir(corruptDir, { recursive: true })
+    await writeFile(
+      path.join(corruptDir, 'SKILL.md'),
+      '---\nname: "zzcorrupt__test-entry"\ndescription: Corrupt skill\n---\n# zzcorrupt__test-entry\n',
+    )
+    await writeFile(
+      path.join(TEMP_DIR, '.gitignore'),
+      [
+        '# shan-managed (do not edit)',
+        '.claude/skills/missing-skill',
+        '# end shan-managed',
+        '',
+      ].join('\n'),
+    )
+
+    const before = await run(collectDoctorFindings('project'))
+    expect(before).not.toBeNull()
+    if (!before) throw new Error('expected doctor findings before autofix')
+    expect(before.findings.some((finding) => finding.aspect === 'stale-gitignore')).toBe(true)
+    expect(
+      before.findings.some(
+        (finding) =>
+          finding.aspect === 'corrupt-library-entry' && finding.message.includes(corruptColonName),
+      ),
+    ).toBe(true)
+
+    const outcome = await run(autoFixDoctorFindings('project'))
+    const gitignore = await readFile(path.join(TEMP_DIR, '.gitignore'), 'utf-8')
+
+    expect(outcome.fixedCount).toBeGreaterThanOrEqual(1)
+    expect(gitignore).not.toContain('.claude/skills/missing-skill')
+    expect(
+      outcome.remainingFindings.some(
+        (finding) =>
+          finding.aspect === 'corrupt-library-entry' && finding.message.includes(corruptColonName),
+      ),
+    ).toBe(true)
+  })
+
+  test('auto-fix repairs deterministically canonicalizable corrupt frontmatter names', async () => {
+    const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+    const skillDir = path.join(libDir, 'skills', 'change', 'undo')
+    await mkdir(skillDir, { recursive: true })
+    await writeFile(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: "skills:change_undo"\ndescription: Corrupt skill\n---\n# skills:change_undo\n',
+    )
+
+    const before = await run(collectDoctorFindings('project'))
+    expect(before).not.toBeNull()
+    if (!before) throw new Error('expected doctor findings before autofix')
+    expect(
+      before.findings.some(
+        (finding) =>
+          finding.aspect === 'corrupt-library-entry' &&
+          finding.message.includes('skills:change_undo'),
+      ),
+    ).toBe(true)
+
+    const outcome = await run(autoFixDoctorFindings('project'))
+
+    expect(
+      outcome.fixDescriptions.some((description) =>
+        description.includes('rewrote frontmatter name: skills:change_undo → skills:change:undo'),
+      ),
+    ).toBe(true)
+    expect(
+      outcome.remainingFindings.some((finding) => finding.aspect === 'corrupt-library-entry'),
+    ).toBe(false)
+
+    const content = await readFile(path.join(skillDir, 'SKILL.md'), 'utf-8')
+    expect(content).toContain('name: "skills:change:undo"')
   })
 
   test('scope=user ignores project-only doctor findings', async () => {

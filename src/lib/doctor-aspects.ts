@@ -68,6 +68,11 @@ const finding = (
   return fix ? { ...base, fix } : base
 }
 
+const yamlQuote = (value: string): string =>
+  /[:#{}&*!|>'"%@`,?]|\[|\]/.test(value)
+    ? `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+    : value
+
 const checkSymlinkTarget = (target: string) =>
   Effect.tryPromise(async () => {
     const stat = await lstat(target)
@@ -332,11 +337,12 @@ const stateDrift: DoctorAspect = {
 /** Find a library entry by its flattened name. */
 const findLibraryByFlatName = (flatName: string, libDir: string) =>
   Effect.gen(function* () {
-    // Try the canonical hierarchical path first.
-    const relPath = Lib.unflattenName(flatName)
-    const candidate = path.join(libDir, relPath)
-    const exists = yield* checkSymlinkTarget(candidate)
-    if (exists) return candidate
+    const parsed = SkillName.parseFlatName(flatName)
+    if (parsed) {
+      const candidate = path.join(libDir, SkillName.toLibraryRelPath(parsed))
+      const exists = yield* checkSymlinkTarget(candidate)
+      if (exists) return candidate
+    }
     // Also try the flat name directly as a directory
     const direct = path.join(libDir, flatName)
     const directExists = yield* checkSymlinkTarget(direct)
@@ -501,45 +507,45 @@ const frontmatterMismatch: DoctorAspect = {
           )
           continue
         }
-        const fmName = skill.frontmatter.name
-        if (fmName === skill.colonName) continue
+        const canonicalFmName = Lib.canonicalFrontmatterName(skill.frontmatter)
+        if (!canonicalFmName) continue
+        if (canonicalFmName === skill.colonName) continue
+        const parsedFmName = SkillName.fromFrontmatterName(canonicalFmName)
 
-        const classification = classifyMismatch(skill.colonName, fmName, census)
+        const classification = classifyMismatch(skill.colonName, canonicalFmName, census)
 
         if (classification === 'separator_only') {
           findings.push(
             finding(
               'frontmatter-mismatch',
               'error',
-              `${skill.colonName} — name="${fmName}" (separator-only mismatch, will rename dir)`,
+              `${skill.colonName} — name="${canonicalFmName}" (separator-only mismatch, will rename dir)`,
               true,
-              () => fixMismatch(skill, fmName, ctx),
+              () => fixMismatch(skill, parsedFmName, ctx),
             ),
           )
         } else if (classification === 'namespace_relocation') {
-          const parsedFmName = SkillName.parseFrontmatterName(fmName)
-          const fmPrefix = parsedFmName ? SkillName.topLevelName(parsedFmName) : fmName
+          const fmPrefix = SkillName.topLevelName(parsedFmName)
           const peerCount = census.get(fmPrefix) ?? 0
           findings.push(
             finding(
               'frontmatter-mismatch',
               'error',
-              `${skill.colonName} — name="${fmName}" (${fmPrefix}: namespace has ${peerCount} peers, will rename dir)`,
+              `${skill.colonName} — name="${canonicalFmName}" (${fmPrefix}: namespace has ${peerCount} peers, will rename dir)`,
               true,
-              () => fixMismatch(skill, fmName, ctx),
+              () => fixMismatch(skill, parsedFmName, ctx),
             ),
           )
         } else {
           // COMPLETE_RENAME or NAMESPACE_RELOCATION with insufficient peers
-          const parsedFmName = SkillName.parseFrontmatterName(fmName)
-          if (parsedFmName && SkillName.isNamespaced(parsedFmName)) {
+          if (SkillName.isNamespaced(parsedFmName)) {
             const fmPrefix = SkillName.topLevelName(parsedFmName)
             const peerCount = census.get(fmPrefix) ?? 0
             findings.push(
               finding(
                 'frontmatter-mismatch',
                 'error',
-                `${skill.colonName} — name="${fmName}" (${fmPrefix}: namespace has ${peerCount} peers, needs >=2)`,
+                `${skill.colonName} — name="${canonicalFmName}" (${fmPrefix}: namespace has ${peerCount} peers, needs >=2)`,
                 false,
               ),
             )
@@ -548,7 +554,7 @@ const frontmatterMismatch: DoctorAspect = {
               finding(
                 'frontmatter-mismatch',
                 'error',
-                `${skill.colonName} — name="${fmName}" (complete rename, manual review needed)`,
+                `${skill.colonName} — name="${canonicalFmName}" (complete rename, manual review needed)`,
                 false,
               ),
             )
@@ -559,13 +565,84 @@ const frontmatterMismatch: DoctorAspect = {
     }),
 }
 
+const corruptLibraryEntry: DoctorAspect = {
+  name: 'corrupt-library-entry',
+  description: 'Skill entry has invalid canonical frontmatter metadata',
+  level: 'error',
+  detect: (ctx) =>
+    Effect.sync(() => {
+      const findings: DoctorFinding[] = []
+
+      for (const skill of ctx.library.filter((candidate) => candidate.libraryScope === ctx.scope)) {
+        if (!skill.frontmatter) continue
+        if (Lib.canonicalFrontmatterName(skill.frontmatter)) continue
+        const repairedName = SkillName.parseObservedFrontmatterName(skill.frontmatter.name)
+
+        if (repairedName) {
+          const canonicalName = SkillName.toFrontmatterName(repairedName)
+          findings.push(
+            finding(
+              'corrupt-library-entry',
+              'error',
+              `${skill.colonName} — name="${skill.frontmatter.name}" (invalid canonical skill name on disk, will rewrite frontmatter name to "${canonicalName}")`,
+              true,
+              () => fixCorruptLibraryEntry(skill, canonicalName),
+            ),
+          )
+        } else {
+          findings.push(
+            finding(
+              'corrupt-library-entry',
+              'error',
+              `${skill.colonName} — name="${skill.frontmatter.name}" (invalid canonical skill name on disk)`,
+              false,
+            ),
+          )
+        }
+      }
+
+      return findings
+    }),
+}
+
+const fixCorruptLibraryEntry = (
+  skill: Lib.SkillInfo,
+  canonicalName: string,
+): Effect.Effect<string, unknown> =>
+  Effect.gen(function* () {
+    if (!skill.frontmatter) {
+      return yield* Effect.fail(new Error(`missing frontmatter for ${skill.libraryRelPath}`))
+    }
+
+    const skillMdPath = path.join(skill.libraryDir, skill.libraryRelPath, 'SKILL.md')
+    const content = yield* Effect.tryPromise(() => readFile(skillMdPath, 'utf-8'))
+    const match = content.match(/^---\n([\s\S]*?)\n---/)
+    if (!match?.[1]) {
+      return yield* Effect.fail(new Error(`missing frontmatter block in ${skillMdPath}`))
+    }
+
+    const lines = match[1].split('\n')
+    const nameLineIndex = lines.findIndex((line) => line.trimStart().startsWith('name:'))
+    if (nameLineIndex === -1) {
+      return yield* Effect.fail(new Error(`missing frontmatter name field in ${skillMdPath}`))
+    }
+
+    const previousName = skill.frontmatter.name
+    lines[nameLineIndex] = `name: ${yamlQuote(canonicalName)}`
+    const nextContent = `---\n${lines.join('\n')}\n---${content.slice(match[0].length)}`
+
+    yield* Effect.tryPromise(() => writeFile(skillMdPath, nextContent))
+
+    return `rewrote frontmatter name: ${previousName} → ${canonicalName} (${skill.libraryRelPath})`
+  })
+
 const fixMismatch = (
   skill: Lib.SkillInfo,
-  fmName: string,
+  fmName: SkillName.SkillName,
   ctx: DoctorContext,
 ): Effect.Effect<string, unknown> =>
   Effect.gen(function* () {
-    const newRelPath = Lib.colonToPath(fmName)
+    const newRelPath = SkillName.toLibraryRelPath(fmName)
     const newDir = path.join(skill.libraryDir, newRelPath)
     const oldDir = path.join(skill.libraryDir, skill.libraryRelPath)
 
@@ -601,7 +678,10 @@ const fixMismatch = (
     }
 
     // Update state if the flattened name changed
-    const oldFlat = Lib.flattenName(skill.libraryRelPath)
+    const parsedOldRelPath = SkillName.parseLibraryRelPath(skill.libraryRelPath)
+    const oldFlat = parsedOldRelPath
+      ? SkillName.toFlatName(parsedOldRelPath)
+      : skill.libraryRelPath.split(path.sep).join('_')
     const newFlat = Lib.flattenName(newRelPath)
     if (oldFlat !== newFlat) {
       const currentState = yield* Lib.loadState()
@@ -610,7 +690,7 @@ const fixMismatch = (
       yield* Lib.saveState(updated)
     }
 
-    return `renamed ${skill.colonName} → ${fmName} (dir: ${skill.libraryRelPath} → ${newRelPath})`
+    return `renamed ${skill.colonName} → ${SkillName.toFrontmatterName(fmName)} (dir: ${skill.libraryRelPath} → ${newRelPath})`
   })
 
 const nameConflict: DoctorAspect = {
@@ -628,7 +708,7 @@ const nameConflict: DoctorAspect = {
       )
 
       for (const skill of ctx.library.filter((candidate) => candidate.libraryScope === ctx.scope)) {
-        const flat = Lib.flattenName(skill.libraryRelPath)
+        const flat = Lib.observedFlatNameFromLibraryRelPath(skill.libraryRelPath)
         if (userCoreNames.has(flat)) {
           findings.push(
             finding(
@@ -663,7 +743,7 @@ const duplicateName: DoctorAspect = {
       const findings: DoctorFinding[] = []
       const flatNames = new Map<string, string[]>()
       for (const skill of ctx.library.filter((candidate) => candidate.libraryScope === ctx.scope)) {
-        const flat = Lib.flattenName(skill.libraryRelPath)
+        const flat = Lib.observedFlatNameFromLibraryRelPath(skill.libraryRelPath)
         const existing = flatNames.get(flat) ?? []
         existing.push(skill.colonName)
         flatNames.set(flat, existing)
@@ -977,6 +1057,7 @@ export const ALL_ASPECTS: readonly DoctorAspect[] = [
   orphanedRouter,
   staleGitignore,
   orphanedScope,
+  corruptLibraryEntry,
   frontmatterMismatch,
   nameConflict,
   duplicateName,

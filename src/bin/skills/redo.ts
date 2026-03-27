@@ -76,8 +76,13 @@ const redoOnOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OnOp' }, scope: Li
     const gitignoreEntries: string[] = []
 
     for (const target of entry.targets) {
-      const flatName = Lib.flattenName(Lib.colonToPath(target))
-      const relPath = Lib.colonToPath(target)
+      const targetPaths = Lib.resolveCanonicalTargetPaths(target)
+      if (!targetPaths) {
+        yield* Console.error(`  warn: skipping invalid history target: ${target}`)
+        continue
+      }
+
+      const { flatName, relPath } = targetPaths
       const linkPath = path.join(dir, flatName)
 
       const already = yield* Effect.tryPromise(() => lstat(linkPath).then(() => true)).pipe(
@@ -140,7 +145,13 @@ const redoOffOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OffOp' }, scope: 
     }
     const gitignoreRemovals: string[] = []
     for (const target of entry.targets) {
-      const flatName = Lib.flattenName(Lib.colonToPath(target))
+      const targetPaths = Lib.resolveCanonicalTargetPaths(target)
+      if (!targetPaths) {
+        yield* Console.error(`  warn: skipping invalid history target: ${target}`)
+        continue
+      }
+
+      const { flatName } = targetPaths
       const linkPath = path.join(dir, flatName)
       yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
       if (scope === 'project') {
@@ -186,8 +197,13 @@ const replaySubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> =>
       const scope = sub.scope === 'user' || sub.scope === 'global' ? 'user' : 'project'
       const libDir = Lib.scopeLibraryDir(scope)
       for (const target of sub.targets) {
-        const flatName = Lib.flattenName(Lib.colonToPath(target))
-        const relPath = Lib.colonToPath(target)
+        const targetPaths = Lib.resolveCanonicalTargetPaths(target)
+        if (!targetPaths) {
+          yield* Console.error(`  warn: skipping invalid history target: ${target}`)
+          continue
+        }
+
+        const { flatName, relPath } = targetPaths
         const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
         const libPath = path.join(libDir, relPath)
@@ -207,7 +223,13 @@ const replaySubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> =>
   if (sub._tag === 'OffOp') {
     return Effect.gen(function* () {
       for (const target of sub.targets) {
-        const flatName = Lib.flattenName(Lib.colonToPath(target))
+        const targetPaths = Lib.resolveCanonicalTargetPaths(target)
+        if (!targetPaths) {
+          yield* Console.error(`  warn: skipping invalid history target: ${target}`)
+          continue
+        }
+
+        const { flatName } = targetPaths
         const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
         yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
