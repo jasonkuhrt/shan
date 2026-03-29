@@ -7,6 +7,7 @@
 import { Console, Effect } from 'effect'
 import * as Lib from '../../lib/skill-library.js'
 import { ALL_ASPECTS, type DoctorContext, type DoctorFinding } from '../../lib/doctor-aspects.js'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 
 export interface DoctorOptions {
   readonly noFix: boolean
@@ -30,7 +31,7 @@ export const createDoctorContext = (scope: Lib.Scope) =>
     const userOutfit = scope === 'user' ? yield* Lib.listOutfit('user') : []
     const projectOutfit = scope === 'project' ? yield* Lib.listOutfit('project') : []
     const gitignoreEntries =
-      scope === 'project' ? yield* Lib.readGitignoreEntries(process.cwd()) : []
+      scope === 'project' ? yield* Lib.readGitignoreEntries(getRuntimeConfig().projectRoot) : []
     const config = yield* Lib.loadConfig()
     const configuredAgents = yield* Lib.resolveConfiguredAgents(config)
 

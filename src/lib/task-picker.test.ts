@@ -1,8 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test'
 import { Effect } from 'effect'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { getRuntimeConfig } from './runtime-config.js'
 
 // Mock @clack/prompts before importing task-picker
 const mockSelect = mock((..._args: unknown[]) =>
@@ -21,7 +21,7 @@ await mock.module('@clack/prompts', () => ({
 import { pickTask } from './task-picker.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
-const tasksDir = join(homedir(), '.claude', 'tasks')
+const tasksDir = getRuntimeConfig().paths.tasksDir
 
 const setTTY = (stdinVal: boolean | undefined, stdoutVal: boolean | undefined) => {
   try {

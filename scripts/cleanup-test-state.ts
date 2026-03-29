@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import * as path from 'node:path'
+import { getRuntimeConfig } from '../src/lib/runtime-config.js'
 
-const STATE_FILE = path.join(homedir(), '.claude', 'shan', 'state.json')
+const STATE_FILE = getRuntimeConfig().paths.stateFile
 const TEST_SCOPE_PATTERN = /(?:^|[\\/])shan-[^\\/]+-test-[^\\/]+$/
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

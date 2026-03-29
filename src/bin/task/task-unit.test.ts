@@ -3,7 +3,8 @@ import { Effect } from 'effect'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 import { taskDump } from './dump.js'
 import { taskOpen } from './open.js'
 
@@ -15,7 +16,7 @@ const TEMP_DIR = realpathSync(RAW_BASE)
 const origCwd = process.cwd()
 
 // Test list in ~/.claude/tasks/
-const TASKS_DIR = path.join(homedir(), '.claude', 'tasks')
+const TASKS_DIR = getRuntimeConfig().paths.tasksDir
 const TEST_LIST = '__shan-task-unit-test__'
 const TEST_LIST_DIR = path.join(TASKS_DIR, TEST_LIST)
 

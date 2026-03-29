@@ -3,7 +3,8 @@ import { Effect } from 'effect'
 import { chmod, lstat, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 import { skillsRedo } from './redo.js'
 import { skillsUndo } from './undo.js'
 import { skillsOn } from './on.js'
@@ -37,7 +38,7 @@ const setupProjectLibrary = async (...skills: string[]) => {
   }
 }
 
-const STATE_FILE = path.join(homedir(), '.claude', 'shan', 'state.json')
+const STATE_FILE = getRuntimeConfig().paths.stateFile
 
 const withSavedState = async (runTest: () => Promise<void>) => {
   const stateContent = await readFile(STATE_FILE, 'utf-8').catch(() => '{}')
@@ -46,10 +47,10 @@ const withSavedState = async (runTest: () => Promise<void>) => {
   } finally {
     if (stateContent === '{}') {
       await rm(STATE_FILE, { force: true })
-      return
+    } else {
+      await mkdir(path.dirname(STATE_FILE), { recursive: true })
+      await writeFile(STATE_FILE, stateContent)
     }
-    await mkdir(path.dirname(STATE_FILE), { recursive: true })
-    await writeFile(STATE_FILE, stateContent)
   }
 }
 
@@ -63,13 +64,13 @@ const writeProjectHistory = async (
     ...savedState,
     version: 2,
     history: {
-      ...((savedState.history ?? {}) as Record<string, unknown>),
+      ...((savedState['history'] ?? {}) as Record<string, unknown>),
       [historyKey]: {
         entries: [entry],
         undoneCount,
       },
     },
-    current: (savedState.current ?? {}) as Record<string, unknown>,
+    current: (savedState['current'] ?? {}) as Record<string, unknown>,
   }
 
   await mkdir(path.dirname(STATE_FILE), { recursive: true })
@@ -78,6 +79,7 @@ const writeProjectHistory = async (
 
 beforeEach(async () => {
   await rm(path.join(TEMP_DIR, '.claude'), { recursive: true, force: true })
+  await rm(STATE_FILE, { force: true })
   process.chdir(TEMP_DIR)
 })
 
@@ -86,7 +88,7 @@ afterAll(async () => {
   await rm(RAW_BASE, { recursive: true, force: true })
 })
 
-describe('skillsRedo', () => {
+describe.serial('skillsRedo', () => {
   test('reports nothing to redo when no undo has been done', async () => {
     await run(skillsRedo(1, 'project'))
   })
@@ -520,10 +522,9 @@ describe('skillsRedo', () => {
   test('redoes on-op history entries while skipping invalid canonical targets', async () => {
     await withSavedState(async () => {
       await setupProjectLibrary('redo-valid-target')
-      const savedState = JSON.parse(await readFile(STATE_FILE, 'utf-8').catch(() => '{}')) as Record<
-        string,
-        unknown
-      >
+      const savedState = JSON.parse(
+        await readFile(STATE_FILE, 'utf-8').catch(() => '{}'),
+      ) as Record<string, unknown>
 
       await writeProjectHistory(
         {
@@ -548,10 +549,9 @@ describe('skillsRedo', () => {
   test('redoes off-op history entries while skipping invalid canonical targets', async () => {
     await withSavedState(async () => {
       await setupProjectLibrary('redo-off-valid-target')
-      const savedState = JSON.parse(await readFile(STATE_FILE, 'utf-8').catch(() => '{}')) as Record<
-        string,
-        unknown
-      >
+      const savedState = JSON.parse(
+        await readFile(STATE_FILE, 'utf-8').catch(() => '{}'),
+      ) as Record<string, unknown>
       const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
       const libPath = path.join(TEMP_DIR, '.claude', 'skills-library', 'redo-off-valid-target')
       const linkPath = path.join(outfitDir, 'redo-off-valid-target')
@@ -581,10 +581,9 @@ describe('skillsRedo', () => {
   test('redoes move off-op sub-actions while skipping invalid canonical targets', async () => {
     await withSavedState(async () => {
       await setupProjectLibrary('redo-move-off-valid-target')
-      const savedState = JSON.parse(await readFile(STATE_FILE, 'utf-8').catch(() => '{}')) as Record<
-        string,
-        unknown
-      >
+      const savedState = JSON.parse(
+        await readFile(STATE_FILE, 'utf-8').catch(() => '{}'),
+      ) as Record<string, unknown>
       const outfitPath = path.join(TEMP_DIR, '.claude', 'skills', 'redo-move-off-valid-target')
       const libPath = path.join(TEMP_DIR, '.claude', 'skills-library', 'redo-move-off-valid-target')
       await mkdir(path.dirname(outfitPath), { recursive: true })
@@ -623,10 +622,9 @@ describe('skillsRedo', () => {
   test('redoes move on-op sub-actions while skipping invalid canonical targets', async () => {
     await withSavedState(async () => {
       await setupProjectLibrary('redo-move-on-valid-target')
-      const savedState = JSON.parse(await readFile(STATE_FILE, 'utf-8').catch(() => '{}')) as Record<
-        string,
-        unknown
-      >
+      const savedState = JSON.parse(
+        await readFile(STATE_FILE, 'utf-8').catch(() => '{}'),
+      ) as Record<string, unknown>
       const linkPath = path.join(TEMP_DIR, '.claude', 'skills', 'redo-move-on-valid-target')
 
       await writeProjectHistory(

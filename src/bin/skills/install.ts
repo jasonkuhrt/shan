@@ -13,6 +13,7 @@ import * as path from 'node:path'
 import { Console, Effect } from 'effect'
 import * as Lib from '../../lib/skill-library.js'
 import * as SkillName from '../../lib/skill-name.js'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 import { skillsMove } from './move.js'
 import { skillsOn } from './on.js'
 
@@ -47,7 +48,7 @@ const defaultRunCli = (args: readonly string[]) =>
     () =>
       new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
         const child = spawn(NPX_BIN, ['--yes', 'skills', ...args], {
-          cwd: process.cwd(),
+          cwd: getRuntimeConfig().projectRoot,
           env: process.env,
           stdio: ['ignore', 'pipe', 'pipe'],
         })

@@ -18,10 +18,10 @@
  */
 
 import { Effect } from 'effect'
-import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { readdir, stat } from 'node:fs/promises'
 import { Glob } from 'bun'
+import { getRuntimeConfig } from './runtime-config.js'
 
 // -----------------------------------------------------------------------------
 // Types
@@ -64,7 +64,7 @@ export interface ResolveOptions {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-const tasksDir = () => join(homedir(), '.claude', 'tasks')
+const tasksDir = () => getRuntimeConfig().paths.tasksDir
 
 // -----------------------------------------------------------------------------
 // Discovery
@@ -75,9 +75,10 @@ const tasksDir = () => join(homedir(), '.claude', 'tasks')
  * Scans ~/.claude/projects/<project-dir>/ for .jsonl session files.
  */
 const getProjectSessionIds = async (directory?: string): Promise<Set<string>> => {
-  const cwd = directory ?? process.cwd()
+  const runtime = getRuntimeConfig()
+  const cwd = directory ?? runtime.projectRoot
   const projectDirName = cwd.replace(/[/.]/g, '-')
-  const projectDir = join(homedir(), '.claude', 'projects', projectDirName)
+  const projectDir = join(runtime.paths.claudeProjectsDir, projectDirName)
   const ids = new Set<string>()
 
   try {

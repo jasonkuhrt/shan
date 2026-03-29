@@ -1,8 +1,8 @@
 import { describe, expect, test, mock } from 'bun:test'
 import { Cause, Effect, Exit } from 'effect'
 import { chmod, lstat, mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import * as path from 'node:path'
+import { getRuntimeConfig } from './runtime-config.js'
 import * as Lib from './skill-library.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
@@ -289,19 +289,25 @@ describe('estimateCharCost', () => {
 
 describe('outfitDir', () => {
   test('user scope returns home dir', () => {
-    expect(Lib.outfitDir('user')).toBe(path.join(homedir(), '.claude/skills'))
+    expect(Lib.outfitDir('user')).toBe(path.join(getRuntimeConfig().homeDir, '.claude/skills'))
   })
   test('project scope returns cwd-relative', () => {
-    expect(Lib.outfitDir('project')).toBe(path.join(process.cwd(), '.claude/skills'))
+    expect(Lib.outfitDir('project')).toBe(
+      path.join(getRuntimeConfig().projectRoot, '.claude/skills'),
+    )
   })
 })
 
 describe('agentOutfitDir', () => {
   test('codex user scope uses ~/.codex/skills', () => {
-    expect(Lib.agentOutfitDir('user', 'codex')).toBe(path.join(homedir(), '.codex/skills'))
+    expect(Lib.agentOutfitDir('user', 'codex')).toBe(
+      path.join(getRuntimeConfig().homeDir, '.codex/skills'),
+    )
   })
   test('claude project scope uses .claude/skills', () => {
-    expect(Lib.agentOutfitDir('project', 'claude')).toBe(path.join(process.cwd(), '.claude/skills'))
+    expect(Lib.agentOutfitDir('project', 'claude')).toBe(
+      path.join(getRuntimeConfig().projectRoot, '.claude/skills'),
+    )
   })
 })
 
@@ -1054,8 +1060,7 @@ describe('state operations', () => {
 
 describe('loadState', () => {
   test('returns default for missing file', async () => {
-    // loadState reads from SHAN_DIR which exists on the user's machine,
-    // but we can verify the shape
+    await rm(Lib.STATE_FILE, { force: true })
     const state = await run(Lib.loadState())
     expect(state.version).toBe(2)
     expect(state.current).toBeDefined()
@@ -1114,14 +1119,12 @@ describe('loadConfig', () => {
 
 describe('libraryExists', () => {
   test('returns true when library dir exists', async () => {
-    const lib = path.join(tmpBase, 'lib-exists-test')
     try {
-      await mkdir(lib, { recursive: true })
-      // We test the general check; the real LIBRARY_DIR may or may not exist
+      await mkdir(Lib.LIBRARY_DIR, { recursive: true })
       const exists = await run(Lib.libraryExists('user'))
-      expect(typeof exists).toBe('boolean')
+      expect(exists).toBe(true)
     } finally {
-      await rm(lib, { recursive: true, force: true })
+      await rm(Lib.LIBRARY_DIR, { recursive: true, force: true })
     }
   })
   test('no scope checks both', async () => {
@@ -1510,8 +1513,6 @@ describe('resolveTarget (skill-library)', () => {
 
 describe('saveState', () => {
   test('saves state file', async () => {
-    // saveState writes to SHAN_DIR which exists on user's machine
-    // We just test it doesn't throw with the current state
     const state = await run(Lib.loadState())
     await run(Lib.saveState(state))
     // Verify file exists and can be read back

@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { getRuntimeConfig } from './runtime-config.js'
 import { resolveSessionPath, extractSessionId } from './session-resolver.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
@@ -18,7 +18,7 @@ describe('resolveSessionPath', () => {
 
   test('home-relative path expands tilde', async () => {
     const result = await run(resolveSessionPath('~/some/session.jsonl'))
-    expect(result).toBe(`${homedir()}/some/session.jsonl`)
+    expect(result).toBe(`${getRuntimeConfig().homeDir}/some/session.jsonl`)
   })
 
   test('relative .jsonl path resolves against cwd', async () => {
@@ -39,7 +39,7 @@ describe('resolveSessionPath', () => {
   test('session ID prefix finds matching file in ~/.claude/projects', async () => {
     // Create a temporary session file in ~/.claude/projects for prefix search
     const uniqueId = `shan-test-resolver-${Date.now()}`
-    const projectDir = join(homedir(), '.claude', 'projects', 'shan-test-resolver')
+    const projectDir = join(getRuntimeConfig().paths.claudeProjectsDir, 'shan-test-resolver')
     const sessionPath = join(projectDir, `${uniqueId}.jsonl`)
 
     try {

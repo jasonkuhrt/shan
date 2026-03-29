@@ -32,18 +32,10 @@ afterAll(async () => {
 
 describe('skillsInstallUser', () => {
   test('installs bundled skills into user library', async () => {
-    // Uses Lib.LIBRARY_DIR and Lib.USER_OUTFIT_DIR (homedir-based constants).
-    // In parallel test runs, mock.module bleeding from other test files may
-    // redirect these to a temp dir. Guard assertions accordingly.
     await run(skillsInstallUser())
-
-    try {
-      const libraryEntries = await readdir(Lib.LIBRARY_DIR)
-      expect(libraryEntries).toContain('shan')
-      expect(libraryEntries).toContain('skills')
-    } catch {
-      // LIBRARY_DIR may point to mocked homedir in parallel runs — skip assertion
-    }
+    const libraryEntries = await readdir(Lib.LIBRARY_DIR)
+    expect(libraryEntries).toContain('shan')
+    expect(libraryEntries).toContain('skills')
   })
 
   test('is idempotent — re-running does not break state', async () => {
@@ -54,13 +46,8 @@ describe('skillsInstallUser', () => {
 
   test('creates user outfit entries', async () => {
     await run(skillsInstallUser())
-
-    try {
-      const outfitEntries = await readdir(Lib.USER_OUTFIT_DIR)
-      expect(outfitEntries).toContain('shan')
-      expect(outfitEntries).toContain('skills')
-    } catch {
-      // USER_OUTFIT_DIR may point to mocked homedir in parallel runs — skip assertion
-    }
+    const outfitEntries = await readdir(Lib.USER_OUTFIT_DIR)
+    expect(outfitEntries).toContain('shan')
+    expect(outfitEntries).toContain('skills')
   })
 })

@@ -40,6 +40,12 @@ shan skills doctor
 
 ## Commands
 
+### Init
+
+```sh
+shan init                                      # scaffold missing AGENTS/.claude rule files
+```
+
 ### Transcripts
 
 ```sh

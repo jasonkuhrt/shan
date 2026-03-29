@@ -1,13 +1,11 @@
 #!/usr/bin/env bun
 
-import { cleanupTestState } from './cleanup-test-state.js'
-
 const coverage = process.argv.includes('--coverage')
 const args = coverage
   ? [
       'test',
       '--coverage',
-      // Coverage runs share global shan state fixtures, so serialize them for deterministic lcov output.
+      // Serialize coverage runs so Bun workers produce deterministic lcov output.
       '--max-concurrency=1',
       '--coverage-reporter=text',
       '--coverage-reporter=lcov',
@@ -32,7 +30,5 @@ const [stdout, stderr, exitCode] = await Promise.all([
 
 if (stdout) process.stdout.write(stdout)
 if (stderr) process.stderr.write(stderr)
-
-await cleanupTestState()
 
 process.exit(exitCode)

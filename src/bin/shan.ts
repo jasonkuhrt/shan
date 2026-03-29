@@ -3,6 +3,7 @@
  * shan - agent tooling CLI (named after Claude Shannon)
  *
  * Usage:
+ *   shan init
  *   shan <namespace> <command> [args...]
  *
  * Namespaces:
@@ -17,6 +18,7 @@ import { transcriptAnalyze } from './transcript/analyze.js'
 import { transcriptPrint } from './transcript/print.js'
 import { taskDump } from './task/dump.js'
 import { taskOpen } from './task/open.js'
+import { shanInit } from './init.js'
 import { skillsOn } from './skills/on.js'
 import { skillsOff } from './skills/off.js'
 import { skillsList } from './skills/list.js'
@@ -40,6 +42,7 @@ const USAGE = `
 shan - agent tooling CLI
 
 Usage:
+  shan init
   shan <namespace> <command> [target] [options]
 
 Namespaces:
@@ -49,6 +52,8 @@ Namespaces:
   lint          Static analysis for Claude Code configuration
 
 Commands:
+  shan init                             Scaffold missing project agent rule files
+
   shan transcript print [target]        Print readable conversation log
   shan transcript dump [target]         Dump transcript as navigable Markdown
   shan transcript dump --raw [target]   Copy raw JSONL without transformation
@@ -234,7 +239,9 @@ export const resolveSkillsScope = (flags: ParsedFlags, command: string, targetIn
         const lastUserEntry = userHistory.entries[userActiveCount - 1]
         const lastProjectEntry = projectHistory.entries[projectActiveCount - 1]
         if (lastUserEntry && lastProjectEntry) {
-          return lastUserEntry.timestamp > lastProjectEntry.timestamp ? 'user' as const : 'project' as const
+          return lastUserEntry.timestamp > lastProjectEntry.timestamp
+            ? ('user' as const)
+            : ('project' as const)
         }
       }
 
@@ -253,7 +260,9 @@ export const program = Effect.gen(function* () {
     return
   }
 
-  if (namespace === 'transcript') {
+  if (namespace === 'init') {
+    yield* shanInit()
+  } else if (namespace === 'transcript') {
     const { flags, positional } = parseArgs(args)
 
     if (command === 'print') {
@@ -331,6 +340,14 @@ export const program = Effect.gen(function* () {
       return yield* Effect.fail(new Error('Unknown command'))
     }
   } else if (namespace === 'lint') {
+    if (command && command !== 'hooks') {
+      yield* Console.error(`Unknown lint command: ${command}`)
+      yield* Console.log(
+        '\nAvailable commands:\n  hooks    Check hook/statusLine paths in settings',
+      )
+      return yield* Effect.fail(new Error('Unknown command'))
+    }
+
     const ctx = buildLintContext()
     if (ctx.settingsFiles.length === 0) {
       yield* Console.log('lint: no settings files found')
@@ -342,21 +359,7 @@ export const program = Effect.gen(function* () {
     yield* Console.log('')
 
     // Collect findings from requested (or all) rules
-    const findings =
-      command === 'hooks' || !command
-        ? lintHooks(ctx)
-        : (() => {
-            // Unknown subcommand — fall through to error
-            return null
-          })()
-
-    if (findings === null) {
-      yield* Console.error(`Unknown lint command: ${command}`)
-      yield* Console.log(
-        '\nAvailable commands:\n  hooks    Check hook/statusLine paths in settings',
-      )
-      return yield* Effect.fail(new Error('Unknown command'))
-    }
+    const findings = lintHooks(ctx)
 
     for (const f of findings) {
       yield* renderFinding(f)

@@ -13,6 +13,7 @@ import { Console, Effect } from 'effect'
 import * as path from 'node:path'
 import { cp, lstat, mkdir, rename, rm, symlink, unlink } from 'node:fs/promises'
 import * as Lib from '../../lib/skill-library.js'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 
 export const skillsRedo = (n: number, scope: Lib.Scope) =>
   Effect.gen(function* () {
@@ -107,7 +108,7 @@ const redoOnOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OnOp' }, scope: Li
     }
 
     if (gitignoreEntries.length > 0) {
-      yield* Lib.manageGitignore(process.cwd(), gitignoreEntries)
+      yield* Lib.manageGitignore(getRuntimeConfig().projectRoot, gitignoreEntries)
     }
   })
 
@@ -137,7 +138,7 @@ const redoOffOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OffOp' }, scope: 
       // Clean up gitignore entries for project scope
       if (scope === 'project' && removedNames.length > 0) {
         yield* Lib.manageGitignoreRemove(
-          process.cwd(),
+          getRuntimeConfig().projectRoot,
           removedNames.map((n) => `.claude/skills/${n}`),
         )
       }
@@ -159,7 +160,7 @@ const redoOffOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OffOp' }, scope: 
       }
     }
     if (gitignoreRemovals.length > 0) {
-      yield* Lib.manageGitignoreRemove(process.cwd(), gitignoreRemovals)
+      yield* Lib.manageGitignoreRemove(getRuntimeConfig().projectRoot, gitignoreRemovals)
     }
   })
 

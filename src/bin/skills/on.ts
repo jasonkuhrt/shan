@@ -9,6 +9,7 @@ import { Console, Effect } from 'effect'
 import { lstat, mkdir, symlink, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from '../../lib/skill-library.js'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 import * as SkillName from '../../lib/skill-name.js'
 
 export interface SkillsOnOptions {
@@ -175,7 +176,7 @@ export const skillsOn = (targetInput: string, options: SkillsOnOptions) =>
 
     // Update gitignore
     if (gitignoreEntries.length > 0) {
-      yield* Lib.manageGitignore(process.cwd(), gitignoreEntries)
+      yield* Lib.manageGitignore(getRuntimeConfig().projectRoot, gitignoreEntries)
     }
 
     // Update current state

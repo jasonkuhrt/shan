@@ -9,21 +9,25 @@
  */
 
 import { Effect } from 'effect'
-import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { Glob } from 'bun'
+import { getRuntimeConfig } from './runtime-config.js'
 
 /**
  * Find a session file by ID prefix in ~/.claude/projects
  */
 const findSessionFile = async (input: string): Promise<string | null> => {
-  const claudeDir = join(homedir(), '.claude', 'projects')
+  const claudeDir = getRuntimeConfig().paths.claudeProjectsDir
   const glob = new Glob('**/*.jsonl')
 
-  for await (const file of glob.scan({ cwd: claudeDir, absolute: true })) {
-    if (basename(file).startsWith(input)) {
-      return file
+  try {
+    for await (const file of glob.scan({ cwd: claudeDir, absolute: true })) {
+      if (basename(file).startsWith(input)) {
+        return file
+      }
     }
+  } catch {
+    return null
   }
   return null
 }
@@ -46,12 +50,12 @@ export const resolveSessionPath = (input: string) =>
 
     // Home-relative path
     if (input.startsWith('~')) {
-      return input.replace('~', homedir())
+      return input.replace('~', getRuntimeConfig().homeDir)
     }
 
     // Relative path (ends with .jsonl)
     if (input.endsWith('.jsonl')) {
-      return resolve(process.cwd(), input)
+      return resolve(getRuntimeConfig().projectRoot, input)
     }
 
     // Session ID prefix - search in ~/.claude/projects

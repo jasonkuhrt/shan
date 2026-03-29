@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { getRuntimeConfig } from './runtime-config.js'
 import { parseTarget, discoverTaskLists, resolveTarget } from './task-resolver.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
-const tasksDir = join(homedir(), '.claude', 'tasks')
+const tasksDir = getRuntimeConfig().paths.tasksDir
 
 // ── parseTarget ──────────────────────────────────────────────────
 

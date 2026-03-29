@@ -5,6 +5,7 @@ import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
 import type { DoctorContext, DoctorFinding } from '../../lib/doctor-aspects.js'
+import * as Lib from '../../lib/skill-library.js'
 import { autoFixDoctorFindings, collectDoctorFindings, skillsDoctor } from './doctor.js'
 import { skillsOn } from './on.js'
 import { registerStateFileRestore } from './test-state.js'
@@ -47,9 +48,6 @@ afterAll(async () => {
 
 describe('skillsDoctor', () => {
   test('reports library not found when no library exists', async () => {
-    // No .claude/skills-library/ in temp dir — doctor should exit early
-    // libraryExists() with no scope checks both LIBRARY_DIR and projectLibraryDir()
-    // This uses the user's real LIBRARY_DIR, so it may or may not exist
     await run(skillsDoctor({ noFix: true }))
   })
 
@@ -261,5 +259,108 @@ describe('skillsDoctor', () => {
     expect(outcome.fixedCount).toBe(1)
     expect(outcome.fixDescriptions).toEqual(['repointed: shared-skill → project library'])
     expect(targetState as 'user' | 'project').toBe('project')
+  })
+
+  test('returns immediately when no doctor context is available', async () => {
+    const outcome = await run(autoFixDoctorFindings('project', () => Effect.succeed(null)))
+
+    expect(outcome).toEqual({
+      fixedCount: 0,
+      fixDescriptions: [],
+      remainingFindings: [],
+    })
+  })
+
+  test('records failed fixes once and does not retry them in the same run', async () => {
+    let attempts = 0
+
+    const collect = (_scope: 'user' | 'project') =>
+      Effect.succeed({
+        ctx: {
+          scope: 'project',
+          state: { version: 2, current: {}, history: {} },
+          library: [],
+          userLibraryDir: '/tmp/user-library',
+          projectLibraryDir: '/tmp/project-library',
+          userOutfit: [],
+          userOutfitDir: '/tmp/user-outfit',
+          projectOutfit: [],
+          projectOutfitDir: '/tmp/project-outfit',
+          gitignoreEntries: [],
+          config: {
+            version: 1,
+            skills: {
+              historyLimit: 50,
+              defaultScope: 'project',
+              agents: ['claude', 'codex'],
+            },
+          },
+          configuredAgents: ['claude', 'codex'],
+        } satisfies DoctorContext,
+        findings: [
+          {
+            aspect: 'broken-fix',
+            level: 'error',
+            message: 'always fails',
+            fixable: true,
+            fix: () => {
+              attempts++
+              return Effect.fail(new Error('boom'))
+            },
+          },
+        ] satisfies DoctorFinding[],
+      })
+
+    const outcome = await run(autoFixDoctorFindings('project', collect))
+
+    expect(attempts).toBe(1)
+    expect(outcome.fixedCount).toBe(0)
+    expect(outcome.fixDescriptions).toEqual([])
+    expect(outcome.remainingFindings).toHaveLength(1)
+  })
+
+  test('skillsDoctor keeps unfixable findings visible and trims history to the configured limit', async () => {
+    const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+    const corruptDir = path.join(libDir, 'zzcorrupt__test-entry')
+
+    await mkdir(corruptDir, { recursive: true })
+    await writeFile(
+      path.join(corruptDir, 'SKILL.md'),
+      '---\nname: "zzcorrupt__test-entry"\ndescription: Corrupt skill\n---\n# zzcorrupt__test-entry\n',
+    )
+    await writeFile(
+      path.join(TEMP_DIR, '.gitignore'),
+      [
+        '# shan-managed (do not edit)',
+        '.claude/skills/missing-skill',
+        '# end shan-managed',
+        '',
+      ].join('\n'),
+    )
+    await mkdir(path.dirname(Lib.CONFIG_FILE), { recursive: true })
+    await writeFile(
+      Lib.CONFIG_FILE,
+      JSON.stringify(
+        {
+          version: 1,
+          skills: {
+            historyLimit: 0,
+            defaultScope: 'project',
+            agents: ['claude'],
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+    )
+
+    await run(skillsDoctor({ noFix: false }))
+
+    const gitignore = await readFile(path.join(TEMP_DIR, '.gitignore'), 'utf-8')
+    const state = await run(Lib.loadState())
+    const history = Lib.getProjectHistory(state, 'project')
+
+    expect(gitignore).not.toContain('.claude/skills/missing-skill')
+    expect(history.entries).toEqual([])
   })
 })

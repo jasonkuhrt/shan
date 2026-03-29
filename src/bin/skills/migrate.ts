@@ -16,9 +16,9 @@
 
 import { Console, Effect } from 'effect'
 import { lstat, mkdir, readdir, readlink, rename, rm, symlink, unlink } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import * as path from 'node:path'
 import * as Lib from '../../lib/skill-library.js'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 
 export interface MigrateDirs {
   oldInventoryDir: string
@@ -28,8 +28,8 @@ export interface MigrateDirs {
 }
 
 const defaultDirs = (): MigrateDirs => ({
-  oldInventoryDir: path.join(homedir(), '.claude/skill-inventory'),
-  oldLoadoutsFile: path.join(homedir(), '.claude/skill-loadouts.yml'),
+  oldInventoryDir: getRuntimeConfig().paths.legacySkillInventoryDir,
+  oldLoadoutsFile: getRuntimeConfig().paths.legacySkillLoadoutsFile,
   libraryDir: Lib.LIBRARY_DIR,
   outfitDir: Lib.USER_OUTFIT_DIR,
 })

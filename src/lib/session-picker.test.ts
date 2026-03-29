@@ -1,8 +1,9 @@
 import { describe, expect, test, mock, afterEach } from 'bun:test'
 import { Effect } from 'effect'
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, mkdir, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tmpdir, homedir } from 'node:os'
+import { tmpdir } from 'node:os'
+import { getRuntimeConfig } from './runtime-config.js'
 
 // Mock @clack/prompts before importing session-picker
 const selectMock = mock((..._args: unknown[]) => Promise.resolve<unknown>('selected-value'))
@@ -92,6 +93,78 @@ describe('pickSession', () => {
     expect(error.message).toMatch(/cancelled|No sessions/)
   })
 
+  test('formats multi-project session labels and reports cancellation after discovery', async () => {
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, writable: true })
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, writable: true })
+
+    const claudeProjectsDir = getRuntimeConfig().paths.claudeProjectsDir
+    const now = Date.now()
+    const sessionFixtures = [
+      {
+        project: join('shared-root-one', 'alpha'),
+        id: 'yesterday-session',
+        size: 2 * 1024,
+        daysAgo: 1,
+      },
+      {
+        project: join('shared-root-two', 'beta'),
+        id: 'days-session',
+        size: 512,
+        daysAgo: 3,
+      },
+      {
+        project: join('shared-root-three', 'gamma'),
+        id: 'weeks-session',
+        size: 1536,
+        daysAgo: 10,
+      },
+      {
+        project: join('shared-root-four', 'delta'),
+        id: 'months-session',
+        size: 2 * 1024 * 1024,
+        daysAgo: 45,
+      },
+    ] as const
+
+    try {
+      for (const fixture of sessionFixtures) {
+        const dir = join(claudeProjectsDir, fixture.project)
+        const file = join(dir, `${fixture.id}.jsonl`)
+        const timestamp = new Date(now - fixture.daysAgo * 24 * 60 * 60 * 1000)
+
+        await mkdir(dir, { recursive: true })
+        await writeFile(file, Buffer.alloc(fixture.size, 'x'))
+        await utimes(file, timestamp, timestamp)
+      }
+
+      selectMock.mockImplementation(() => Promise.resolve(Symbol('cancel')))
+      isCancelMock.mockImplementation(() => true)
+
+      const error = await runFail(pickSession({ all: true }))
+      expect(error.message).toContain('Selection cancelled')
+
+      const [firstCall] = selectMock.mock.calls
+      const args = firstCall?.[0] as
+        | { message: string; options: Array<{ label: string; value: string }> }
+        | undefined
+
+      expect(args).toBeDefined()
+      expect(args?.message).toContain('~/.claude/projects/shared-root-')
+
+      const labels = (args?.options ?? []).map((option) => option.label).join('\n')
+      expect(labels).toContain('2KB')
+      expect(labels).toContain('2.0MB')
+      expect(labels).toContain('yesterday')
+      expect(labels).toContain('3d ago')
+      expect(labels).toContain('1w ago')
+      expect(labels).toContain('1mo ago')
+    } finally {
+      for (const fixture of sessionFixtures) {
+        await rm(join(claudeProjectsDir, fixture.project), { recursive: true, force: true })
+      }
+    }
+  })
+
   test('returns selected session path on success', async () => {
     Object.defineProperty(process.stdin, 'isTTY', { value: true, writable: true })
     Object.defineProperty(process.stdout, 'isTTY', { value: true, writable: true })
@@ -99,7 +172,7 @@ describe('pickSession', () => {
     // Create a session file in the claude projects dir for a known directory
     const tmpDir = await mkdtemp(join(tmpdir(), 'shan-pick-'))
     const projectDirName = tmpDir.replace(/[/.]/g, '-')
-    const claudeProjectDir = join(homedir(), '.claude', 'projects', projectDirName)
+    const claudeProjectDir = join(getRuntimeConfig().paths.claudeProjectsDir, projectDirName)
 
     try {
       await mkdir(claudeProjectDir, { recursive: true })

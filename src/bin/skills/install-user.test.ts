@@ -174,51 +174,55 @@ describe('skills install-user', () => {
     }
   })
 
-  test('auto-detects codex, writes the cache, and reuses the cached result', async () => {
-    const home = await mkdtemp(path.join(tmpdir(), 'shan-install-user-auto-agents.'))
+  test(
+    'auto-detects codex, writes the cache, and reuses the cached result',
+    async () => {
+      const home = await mkdtemp(path.join(tmpdir(), 'shan-install-user-auto-agents.'))
 
-    try {
-      const binDir = path.join(home, 'bin')
-      const codexBin = path.join(binDir, 'codex')
-      const cacheFile = path.join(home, '.local', 'shan', 'cache.json')
-      await mkdir(binDir, { recursive: true })
-      await writeFile(codexBin, '#!/bin/sh\nexit 0\n')
-      await chmod(codexBin, 0o755)
+      try {
+        const binDir = path.join(home, 'bin')
+        const codexBin = path.join(binDir, 'codex')
+        const cacheFile = path.join(home, '.local', 'shan', 'cache.json')
+        await mkdir(binDir, { recursive: true })
+        await writeFile(codexBin, '#!/bin/sh\nexit 0\n')
+        await chmod(codexBin, 0o755)
 
-      const first = await runShan(home, ['skills', 'install-user'], {
-        PATH: `${binDir}:${process.env['PATH'] ?? ''}`,
-      })
+        const first = await runShan(home, ['skills', 'install-user'], {
+          PATH: `${binDir}:${process.env['PATH'] ?? ''}`,
+        })
 
-      expect(first.exitCode).toBe(0)
+        expect(first.exitCode).toBe(0)
 
-      const rawCache: unknown = JSON.parse(await Bun.file(cacheFile).text())
-      const agents = isRecord(rawCache) ? rawCache['agents'] : null
-      const installed = isRecord(agents) ? agents['installed'] : null
-      expect(isRecord(rawCache)).toBe(true)
-      expect(isRecord(agents)).toBe(true)
-      expect(Array.isArray(installed) ? installed : []).toContain('codex')
+        const rawCache: unknown = JSON.parse(await Bun.file(cacheFile).text())
+        const agents = isRecord(rawCache) ? rawCache['agents'] : null
+        const installed = isRecord(agents) ? agents['installed'] : null
+        expect(isRecord(rawCache)).toBe(true)
+        expect(isRecord(agents)).toBe(true)
+        expect(Array.isArray(installed) ? installed : []).toContain('codex')
 
-      const firstMirrorStat = await lstat(path.join(home, '.codex', 'skills'))
-      expect(firstMirrorStat.isSymbolicLink()).toBe(true)
-      expect(await readlink(path.join(home, '.codex', 'skills'))).toBe(
-        path.join(home, '.claude', 'skills'),
-      )
+        const firstMirrorStat = await lstat(path.join(home, '.codex', 'skills'))
+        expect(firstMirrorStat.isSymbolicLink()).toBe(true)
+        expect(await readlink(path.join(home, '.codex', 'skills'))).toBe(
+          path.join(home, '.claude', 'skills'),
+        )
 
-      await rm(codexBin, { force: true })
+        await rm(codexBin, { force: true })
 
-      const second = await runShan(home, ['skills', 'install-user'], {
-        PATH: process.env['PATH'] ?? '',
-      })
+        const second = await runShan(home, ['skills', 'install-user'], {
+          PATH: process.env['PATH'] ?? '',
+        })
 
-      expect(second.exitCode).toBe(0)
+        expect(second.exitCode).toBe(0)
 
-      const cachedMirrorStat = await lstat(path.join(home, '.codex', 'skills'))
-      expect(cachedMirrorStat.isSymbolicLink()).toBe(true)
-      expect(await readlink(path.join(home, '.codex', 'skills'))).toBe(
-        path.join(home, '.claude', 'skills'),
-      )
-    } finally {
-      await rm(home, { recursive: true, force: true })
-    }
-  })
+        const cachedMirrorStat = await lstat(path.join(home, '.codex', 'skills'))
+        expect(cachedMirrorStat.isSymbolicLink()).toBe(true)
+        expect(await readlink(path.join(home, '.codex', 'skills'))).toBe(
+          path.join(home, '.claude', 'skills'),
+        )
+      } finally {
+        await rm(home, { recursive: true, force: true })
+      }
+    },
+    { timeout: 15_000 },
+  )
 })

@@ -364,6 +364,24 @@ describe('broken-symlink aspect', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  test('fix for no-target tolerates a missing link path', async () => {
+    const ctx = makeContext({
+      userOutfit: [
+        Lib.OutfitEntry.make({
+          name: 'missing-link',
+          dir: path.join(tmpBase, 'missing-link-does-not-exist'),
+          commitment: 'pluggable',
+          scope: 'user',
+          symlinkTarget: '',
+        }),
+      ],
+    })
+
+    const findings = await run(aspect.detect(ctx))
+    expect(findings).toHaveLength(1)
+    await expect(run(findings[0]!.fix!())).resolves.toContain('removed broken symlink')
+  })
 })
 
 // ── state-drift ───────────────────────────────────────────────────
@@ -982,6 +1000,93 @@ describe('corrupt-library-entry fix action', () => {
       await rm(libDir, { recursive: true, force: true })
     }
   })
+
+  test('fix fails when SKILL.md is missing the frontmatter block', async () => {
+    const libDir = path.join(tmpBase, 'corrupt-fix-missing-block')
+    const skillDir = path.join(libDir, 'missing-block')
+    try {
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(path.join(skillDir, 'SKILL.md'), '# no frontmatter\n')
+
+      const ctx = makeContext({
+        library: [
+          {
+            colonName: 'missing:block',
+            libraryRelPath: 'missing-block',
+            libraryDir: libDir,
+            libraryScope: 'user',
+            frontmatter: { name: 'missing_block', description: 'desc' },
+          },
+        ],
+      })
+
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toHaveLength(1)
+      await expect(run(findings[0]!.fix!())).rejects.toThrow('missing frontmatter block')
+    } finally {
+      await rm(libDir, { recursive: true, force: true })
+    }
+  })
+
+  test('fix fails when SKILL.md frontmatter is missing the name field', async () => {
+    const libDir = path.join(tmpBase, 'corrupt-fix-missing-name')
+    const skillDir = path.join(libDir, 'missing-name')
+    try {
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\ndescription: desc\nargumentHint: optional\n---\n# no name\n',
+      )
+
+      const ctx = makeContext({
+        library: [
+          {
+            colonName: 'missing:name',
+            libraryRelPath: 'missing-name',
+            libraryDir: libDir,
+            libraryScope: 'user',
+            frontmatter: { name: 'missing_name', description: 'desc' },
+          },
+        ],
+      })
+
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toHaveLength(1)
+      await expect(run(findings[0]!.fix!())).rejects.toThrow('missing frontmatter name field')
+    } finally {
+      await rm(libDir, { recursive: true, force: true })
+    }
+  })
+
+  test('fix fails if the detected skill loses its frontmatter before the fix runs', async () => {
+    const libDir = path.join(tmpBase, 'corrupt-fix-missing-frontmatter')
+    const skillDir = path.join(libDir, 'missing-frontmatter')
+    try {
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: missing_frontmatter\ndescription: desc\n---\ntest',
+      )
+
+      const skill: Lib.SkillInfo = {
+        colonName: 'missing:frontmatter',
+        libraryRelPath: 'missing-frontmatter',
+        libraryDir: libDir,
+        libraryScope: 'user',
+        frontmatter: { name: 'missing_frontmatter', description: 'desc' },
+      }
+      const ctx = makeContext({ library: [skill] })
+
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toHaveLength(1)
+
+      ;(skill as { frontmatter: Lib.SkillFrontmatter | null }).frontmatter = null
+
+      await expect(run(findings[0]!.fix!())).rejects.toThrow('missing frontmatter')
+    } finally {
+      await rm(libDir, { recursive: true, force: true })
+    }
+  })
 })
 
 // ── name-conflict ─────────────────────────────────────────────────
@@ -1580,6 +1685,24 @@ describe('broken-symlink fix with nonexistent target', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  test('fix for broken target tolerates a missing link path after fallback', async () => {
+    const ctx = makeContext({
+      userOutfit: [
+        Lib.OutfitEntry.make({
+          name: 'missing-broken-link',
+          dir: path.join(tmpBase, 'missing-broken-link-does-not-exist'),
+          commitment: 'pluggable',
+          scope: 'user',
+          symlinkTarget: path.join(process.cwd(), '__missing_skill_dir__'),
+        }),
+      ],
+    })
+
+    const findings = await run(aspect.detect(ctx))
+    expect(findings).toHaveLength(1)
+    await expect(run(findings[0]!.fix!())).resolves.toContain('removed broken symlink')
+  })
 })
 
 describe('state-drift fix', () => {
@@ -1755,6 +1878,22 @@ describe('state-drift with project scope', () => {
     })
     const findings = await run(aspect.detect(ctx))
     expect(findings).toHaveLength(1)
+  })
+
+  test('ignores state entries for unrelated project paths', async () => {
+    const ctx = makeContext({
+      scope: 'project',
+      state: {
+        version: 2,
+        current: {
+          '/tmp/other-project-root': { installs: ['__ignored__'] },
+        },
+        history: {},
+      },
+    })
+
+    const findings = await run(aspect.detect(ctx))
+    expect(findings).toEqual([])
   })
 })
 
@@ -1947,6 +2086,54 @@ describe('broken-symlink fix with tryGitRenameRepoint', () => {
       const fixResult = await run(findings[0]!.fix!())
       expect(fixResult).toContain('repointed')
       expect(fixResult).toContain('git rename detected')
+    } finally {
+      await rm(outfitDir, { recursive: true, force: true })
+      await rm(repoDir, { recursive: true, force: true })
+    }
+  })
+
+  test('fix falls back when git rename points at a target that no longer exists', async () => {
+    const { execSync } = await import('node:child_process')
+    const { mkdtemp, realpath: fsRealpath } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const repoDir = await fsRealpath(await mkdtemp(path.join(tmpdir(), 'shan-git-missing.')))
+    const outfitDir = path.join(tmpBase, 'bs-git-missing-target-outfit')
+
+    try {
+      execSync('git init', { cwd: repoDir, stdio: 'ignore' })
+      execSync('git config user.email "test@test"', { cwd: repoDir, stdio: 'ignore' })
+      execSync('git config user.name "test"', { cwd: repoDir, stdio: 'ignore' })
+
+      const oldSkillDir = path.join(repoDir, 'old-skill')
+      await mkdir(oldSkillDir, { recursive: true })
+      await writeFile(path.join(oldSkillDir, 'SKILL.md'), 'test skill')
+      execSync('git add -A && git commit -m "add skill"', { cwd: repoDir, stdio: 'ignore' })
+
+      execSync('git mv old-skill new-skill', { cwd: repoDir, stdio: 'ignore' })
+      execSync('git commit -m "rename skill"', { cwd: repoDir, stdio: 'ignore' })
+      await rm(path.join(repoDir, 'new-skill'), { recursive: true, force: true })
+
+      await mkdir(outfitDir, { recursive: true })
+      const oldTarget = path.join(repoDir, 'old-skill')
+      const linkPath = path.join(outfitDir, 'renamed-skill')
+      await symlink(oldTarget, linkPath)
+
+      const ctx = makeContext({
+        userOutfit: [
+          Lib.OutfitEntry.make({
+            name: 'renamed-skill',
+            dir: linkPath,
+            commitment: 'pluggable',
+            scope: 'user',
+            symlinkTarget: oldTarget,
+          }),
+        ],
+      })
+      const findings = await run(aspect.detect(ctx))
+      expect(findings).toHaveLength(1)
+
+      const fixResult = await run(findings[0]!.fix!())
+      expect(fixResult).toContain('removed broken symlink')
     } finally {
       await rm(outfitDir, { recursive: true, force: true })
       await rm(repoDir, { recursive: true, force: true })

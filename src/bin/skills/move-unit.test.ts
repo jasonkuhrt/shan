@@ -3,7 +3,8 @@ import { Effect } from 'effect'
 import { lstat, mkdir, rm, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
+import * as Lib from '../../lib/skill-library.js'
 import { skillsMove } from './move.js'
 import { skillsOn } from './on.js'
 import { skillsUndo } from './undo.js'
@@ -38,11 +39,11 @@ const setupProjectLibrary = async (...skills: string[]) => {
 /** Remove user-scope state that might be left from a prior crash. */
 const cleanupUserScope = async (...names: string[]) => {
   for (const name of names) {
-    await rm(path.join(homedir(), '.claude', 'skills-library', name), {
+    await rm(path.join(Lib.LIBRARY_DIR, name), {
       recursive: true,
       force: true,
     }).catch(() => {})
-    await rm(path.join(homedir(), '.claude', 'skills', name), {
+    await rm(path.join(Lib.USER_OUTFIT_DIR, name), {
       recursive: true,
       force: true,
     }).catch(() => {})
@@ -286,7 +287,7 @@ describe('skillsMove', () => {
     await cleanupUserScope('core-scope-down')
 
     // Create a core skill directly in user outfit
-    const userOutfitDir = path.join(homedir(), '.claude', 'skills')
+    const userOutfitDir = Lib.USER_OUTFIT_DIR
     const userCorePath = path.join(userOutfitDir, 'core-scope-down')
     await mkdir(userCorePath, { recursive: true })
     await writeFile(path.join(userCorePath, 'SKILL.md'), SKILL_MD('core-scope-down'))

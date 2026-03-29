@@ -3,7 +3,8 @@ import { Effect } from 'effect'
 import { lstat, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 import { skillsUndo } from './undo.js'
 import { skillsOn } from './on.js'
 import { skillsOff } from './off.js'
@@ -37,7 +38,7 @@ const setupProjectLibrary = async (...skills: string[]) => {
   }
 }
 
-const STATE_FILE = path.join(homedir(), '.claude', 'shan', 'state.json')
+const STATE_FILE = getRuntimeConfig().paths.stateFile
 
 const withSavedState = async (runTest: () => Promise<void>) => {
   const stateContent = await readFile(STATE_FILE, 'utf-8').catch(() => '{}')
@@ -46,10 +47,10 @@ const withSavedState = async (runTest: () => Promise<void>) => {
   } finally {
     if (stateContent === '{}') {
       await rm(STATE_FILE, { force: true })
-      return
+    } else {
+      await mkdir(path.dirname(STATE_FILE), { recursive: true })
+      await writeFile(STATE_FILE, stateContent)
     }
-    await mkdir(path.dirname(STATE_FILE), { recursive: true })
-    await writeFile(STATE_FILE, stateContent)
   }
 }
 
@@ -63,13 +64,13 @@ const writeProjectHistory = async (
     ...savedState,
     version: 2,
     history: {
-      ...((savedState.history ?? {}) as Record<string, unknown>),
+      ...((savedState['history'] ?? {}) as Record<string, unknown>),
       [historyKey]: {
         entries: [entry],
         undoneCount,
       },
     },
-    current: (savedState.current ?? {}) as Record<string, unknown>,
+    current: (savedState['current'] ?? {}) as Record<string, unknown>,
   }
 
   await mkdir(path.dirname(STATE_FILE), { recursive: true })
@@ -78,6 +79,7 @@ const writeProjectHistory = async (
 
 beforeEach(async () => {
   await rm(path.join(TEMP_DIR, '.claude'), { recursive: true, force: true })
+  await rm(STATE_FILE, { force: true })
   process.chdir(TEMP_DIR)
 })
 
@@ -86,7 +88,7 @@ afterAll(async () => {
   await rm(RAW_BASE, { recursive: true, force: true })
 })
 
-describe('skillsUndo', () => {
+describe.serial('skillsUndo', () => {
   test('reports nothing to undo when history is empty', async () => {
     await run(skillsUndo(1, 'project'))
   })
@@ -290,10 +292,9 @@ describe('skillsUndo', () => {
       await mkdir(outfitDir, { recursive: true })
       await symlink(libPath, linkPath)
 
-      const savedState = JSON.parse(await readFile(STATE_FILE, 'utf-8').catch(() => '{}')) as Record<
-        string,
-        unknown
-      >
+      const savedState = JSON.parse(
+        await readFile(STATE_FILE, 'utf-8').catch(() => '{}'),
+      ) as Record<string, unknown>
       await writeProjectHistory(
         {
           _tag: 'MoveOp',
@@ -327,10 +328,9 @@ describe('skillsUndo', () => {
   test('undoes move off-op sub-actions while skipping invalid canonical targets', async () => {
     await withSavedState(async () => {
       await setupProjectLibrary('undo-move-off-valid-target')
-      const savedState = JSON.parse(await readFile(STATE_FILE, 'utf-8').catch(() => '{}')) as Record<
-        string,
-        unknown
-      >
+      const savedState = JSON.parse(
+        await readFile(STATE_FILE, 'utf-8').catch(() => '{}'),
+      ) as Record<string, unknown>
       await writeProjectHistory(
         {
           _tag: 'MoveOp',

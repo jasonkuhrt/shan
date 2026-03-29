@@ -11,6 +11,7 @@ import type { TranscriptEntry } from './transcript-schema.js'
 import { parseTranscriptEntries } from './transcript-parser.js'
 import { resolveSessionPath, extractSessionId } from './session-resolver.js'
 import { pickSession, type PickSessionOptions } from './session-picker.js'
+import { getRuntimeConfig } from './runtime-config.js'
 
 export interface LoadedTranscript {
   sessionPath: string
@@ -39,7 +40,7 @@ export const loadTranscript = (input: string | undefined, options: PickSessionOp
  */
 export const ensureOutputDir = () =>
   Effect.gen(function* () {
-    const outputDir = join(process.cwd(), '.claude', 'transcripts')
+    const outputDir = getRuntimeConfig().paths.transcriptOutputDir
     yield* Effect.promise(() => mkdir(outputDir, { recursive: true }))
     return outputDir
   })

@@ -18,6 +18,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import * as path from 'node:path'
+import { getRuntimeConfig } from './runtime-config.js'
 import * as Lib from './skill-library.js'
 import * as SkillName from './skill-name.js'
 
@@ -191,8 +192,7 @@ const brokenSymlink: DoctorAspect = {
                 true,
                 () =>
                   Effect.gen(function* () {
-                    const linkPath = path.join(Lib.outfitDir(outfit.scope), entry.name)
-                    yield* Effect.tryPromise(() => unlink(linkPath)).pipe(
+                    yield* Effect.tryPromise(() => unlink(entry.dir)).pipe(
                       Effect.catchAll(() => Effect.void),
                     )
                     return `removed broken symlink: ${entry.name}`
@@ -212,11 +212,10 @@ const brokenSymlink: DoctorAspect = {
                 () =>
                   Effect.gen(function* () {
                     // Try git rename detection
-                    const repointed = yield* tryGitRenameRepoint(entry.name, target, outfit.scope)
+                    const repointed = yield* tryGitRenameRepoint(entry.name, target, entry.dir)
                     if (repointed) return repointed
                     // Fallback: remove the broken symlink
-                    const linkPath = path.join(Lib.outfitDir(outfit.scope), entry.name)
-                    yield* Effect.tryPromise(() => unlink(linkPath)).pipe(
+                    yield* Effect.tryPromise(() => unlink(entry.dir)).pipe(
                       Effect.catchAll(() => Effect.void),
                     )
                     return `removed broken symlink: ${entry.name}`
@@ -231,7 +230,7 @@ const brokenSymlink: DoctorAspect = {
 }
 
 /** Try to detect a git rename and repoint the symlink. */
-const tryGitRenameRepoint = (name: string, oldTarget: string, scope: Lib.Scope) =>
+const tryGitRenameRepoint = (name: string, oldTarget: string, linkPath: string) =>
   Effect.gen(function* () {
     // Determine the git repo root for the old target
     const { execSync } = yield* Effect.tryPromise(() => import('node:child_process'))
@@ -260,7 +259,6 @@ const tryGitRenameRepoint = (name: string, oldTarget: string, scope: Lib.Scope) 
         const newAbsPath = path.join(repoRoot, newRelPath)
         const newExists = yield* checkSymlinkTarget(newAbsPath)
         if (newExists) {
-          const linkPath = path.join(Lib.outfitDir(scope), name)
           yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
           yield* Effect.tryPromise(() => symlink(newAbsPath, linkPath))
           return `repointed ${name} → ${newAbsPath} (git rename detected)`
@@ -279,16 +277,15 @@ const stateDrift: DoctorAspect = {
       const findings: DoctorFinding[] = []
       for (const [scopeKey, scopeState] of Object.entries(ctx.state.current)) {
         if (ctx.scope === 'user' && scopeKey !== 'global') continue
-        if (ctx.scope === 'project' && scopeKey !== process.cwd() && scopeKey !== 'project') {
+        if (
+          ctx.scope === 'project' &&
+          scopeKey !== getRuntimeConfig().projectRoot &&
+          scopeKey !== 'project'
+        ) {
           continue
         }
         const resolvedScope: Lib.Scope = scopeKey === 'global' ? 'user' : 'project'
-        const outfitDir =
-          scopeKey === 'global'
-            ? Lib.outfitDir('user')
-            : scopeKey === 'project'
-              ? Lib.outfitDir('project')
-              : path.join(scopeKey, '.claude/skills')
+        const outfitDir = Lib.resolveHistoryOutfitDir(scopeKey)
         for (const flatName of scopeState.installs) {
           const linkPath = path.join(outfitDir, flatName)
           const exists = yield* Effect.tryPromise(() => lstat(linkPath)).pipe(
@@ -406,7 +403,7 @@ const staleGitignore: DoctorAspect = {
       const mirrorEntries = new Set(
         Lib.getMirrorAgents(ctx.configuredAgents).map((agent) =>
           path
-            .relative(process.cwd(), Lib.agentOutfitDir('project', agent))
+            .relative(getRuntimeConfig().projectRoot, Lib.agentOutfitDir('project', agent))
             .split(path.sep)
             .join('/'),
         ),
@@ -424,7 +421,7 @@ const staleGitignore: DoctorAspect = {
               true,
               () =>
                 Effect.gen(function* () {
-                  yield* Lib.manageGitignoreRemove(process.cwd(), [entry])
+                  yield* Lib.manageGitignoreRemove(getRuntimeConfig().projectRoot, [entry])
                   return `removed from gitignore: ${entry}`
                 }),
             ),

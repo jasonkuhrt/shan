@@ -5,6 +5,7 @@ lucid_generated: true
 generated_at: '2026-03-16T00:00:00Z'
 source_files:
   - src/bin/shan.ts
+  - src/bin/init.ts
   - src/bin/transcript/print.ts
   - src/bin/transcript/dump.ts
   - src/bin/transcript/analyze.ts
@@ -26,6 +27,7 @@ source_files:
 ---
 
 ```
+shan init
 shan <namespace> <command> [target] [options]
 ```
 
@@ -64,6 +66,29 @@ Shan reads skills configuration from `~/.config/shan/config.json`.
 `skills.agents: "auto"` probes `claude` and `codex` on `PATH`, then caches the detected set in `~/.local/shan/cache.json` for 24 hours. Delete that cache file to force an immediate refresh.
 
 Claude is the canonical agent for now. Any non-Claude enabled agents are managed as whole-directory mirrors of the matching Claude outfit directories.
+
+## Init
+
+### `init`
+
+Scaffold missing project-level agent rule files using the local system's Claude naming convention.
+
+Creates missing files only:
+
+- `AGENTS.md`
+- `.claude/CLAUDE.md` or `.claude/claude.md`
+- `.claude/CLAUDE.local.md` or `.claude/claude.local.md`
+
+Heartbeat is the reference shape for the generated bridge:
+
+```md
+@.claude/CLAUDE.md
+@.claude/\*.local.md
+```
+
+```sh
+shan init
+```
 
 ## Transcript namespace
 

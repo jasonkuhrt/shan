@@ -7,10 +7,10 @@
 
 import * as Clack from '@clack/prompts'
 import { Effect } from 'effect'
-import { homedir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { Glob } from 'bun'
+import { getRuntimeConfig } from './runtime-config.js'
 
 // -----------------------------------------------------------------------------
 // Types
@@ -54,8 +54,9 @@ export interface DiscoverOptions {
  * Pass `all: true` to return sessions from all projects.
  */
 const discoverSessions = async (options: DiscoverOptions = {}): Promise<SessionInfo[]> => {
-  const claudeDir = join(homedir(), '.claude', 'projects')
-  const targetDir = options.directory ?? process.cwd()
+  const runtime = getRuntimeConfig()
+  const claudeDir = runtime.paths.claudeProjectsDir
+  const targetDir = options.directory ?? runtime.projectRoot
   const projectDirName = toClaudeProjectDir(targetDir)
 
   // If scoped to a directory, only scan that project folder

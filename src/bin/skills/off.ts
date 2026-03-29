@@ -10,6 +10,7 @@ import { Console, Effect, Option } from 'effect'
 import { lstat, rm, unlink } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from '../../lib/skill-library.js'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 import * as SkillName from '../../lib/skill-name.js'
 
 export interface SkillsOffOptions {
@@ -138,7 +139,7 @@ export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
       .filter((a) => a.scope === 'project')
       .map((a) => `.claude/skills/${a.flatName}`)
     if (projectGitignoreRemovals.length > 0) {
-      yield* Lib.manageGitignoreRemove(process.cwd(), projectGitignoreRemovals)
+      yield* Lib.manageGitignoreRemove(getRuntimeConfig().projectRoot, projectGitignoreRemovals)
     }
 
     // Update current state
@@ -203,7 +204,7 @@ const resetAll = (dir: string, scope: Lib.Scope) =>
     // Clean up gitignore entries for project-scope removals
     if (scope === 'project' && removedNames.length > 0) {
       const gitignoreEntries = removedNames.map((n) => `.claude/skills/${n}`)
-      yield* Lib.manageGitignoreRemove(process.cwd(), gitignoreEntries)
+      yield* Lib.manageGitignoreRemove(getRuntimeConfig().projectRoot, gitignoreEntries)
     }
 
     // Cleanup all generated routers

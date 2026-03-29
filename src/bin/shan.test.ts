@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
 import { Effect } from 'effect'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 
@@ -278,6 +278,33 @@ describe('program', () => {
       await withArgv(['lint'], async () => {
         await Effect.runPromise(program)
       })
+    } finally {
+      process.env['HOME'] = origHome
+      process.chdir(origCwd)
+      await rm(homeDir, { recursive: true, force: true })
+      await rm(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  test('init dispatches', async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-init-home-'))
+    const projectDir = await mkdtemp(path.join(tmpdir(), 'shan-init-project-'))
+    const origHome = process.env['HOME']
+    const origCwd = process.cwd()
+
+    try {
+      process.env['HOME'] = homeDir
+      process.chdir(projectDir)
+      await mkdir(path.join(homeDir, '.claude'), { recursive: true })
+      await writeFile(path.join(homeDir, '.claude', 'CLAUDE.md'), '# system\n')
+
+      await withArgv(['init'], async () => {
+        await Effect.runPromise(program)
+      })
+
+      await expect(readFile(path.join(projectDir, 'AGENTS.md'), 'utf8')).resolves.toBe(
+        '@.claude/CLAUDE.md\n@.claude/*.local.md\n',
+      )
     } finally {
       process.env['HOME'] = origHome
       process.chdir(origCwd)

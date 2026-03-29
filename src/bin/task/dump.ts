@@ -12,6 +12,7 @@ import { mkdir, readdir } from 'node:fs/promises'
 import { resolveTarget, type ResolveOptions } from '../../lib/task-resolver.js'
 import { pickTask, type PickTaskOptions } from '../../lib/task-picker.js'
 import { Task } from '../../lib/task-schema.js'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 
 // -----------------------------------------------------------------------------
 // Markdown conversion
@@ -102,7 +103,7 @@ export const taskDump = (input: string | undefined, options: DumpOptions = {}) =
     const target = input ? yield* resolveTarget(input, options) : yield* pickTask(options)
 
     // Output to project's .claude/tasks/<listId>/
-    const outputDir = join(process.cwd(), '.claude', 'tasks', target.listId)
+    const outputDir = join(getRuntimeConfig().paths.projectTasksDir, target.listId)
     yield* Effect.promise(() => mkdir(outputDir, { recursive: true }))
 
     if (target.kind === 'task') {

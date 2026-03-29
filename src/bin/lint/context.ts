@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import * as os from 'node:os'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 
 // ── Types ────────────────────────────────────────────────
 
@@ -40,8 +40,9 @@ const displayPath = (filePath: string, home: string): string =>
   filePath.startsWith(home) ? filePath.replace(home, '~') : filePath
 
 export const buildLintContext = (): LintContext => {
-  const home = os.homedir()
-  const projectDir = process.cwd()
+  const runtime = getRuntimeConfig()
+  const home = runtime.homeDir
+  const projectDir = runtime.projectRoot
   const settingsFiles: SettingsFile[] = []
 
   const candidates: Array<{ filePath: string; scope: SettingsFile['scope'] }> = [

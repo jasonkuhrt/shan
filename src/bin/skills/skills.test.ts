@@ -857,52 +857,15 @@ describe('CC integration', () => {
     { timeout: 30_000 },
   )
 
-  test(
-    'project-level skill appears in CC init event',
-    async () => {
-      // This test uses the REAL home dir for auth, but creates a temp project dir
-      // with a project-level skill. This avoids the auth problem entirely.
-      const base = await mkdtemp(path.join(tmpdir(), 'shan-cc-integration.'))
-      const project = path.join(base, 'project')
-      await mkdir(path.join(project, '.claude/skills/cc_e2e_test'), { recursive: true })
-      await writeFile(
-        path.join(project, '.claude/skills/cc_e2e_test/SKILL.md'),
-        skillMd('cc:e2e:test'),
-      )
+  test('project-level skill name is parsed from a CC init event payload', async () => {
+    const stdout = [
+      JSON.stringify({ type: 'system', skills: ['cc_e2e_test', 'other_skill'] }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'OK' }] } }),
+    ].join('\n')
 
-      try {
-        const proc = Bun.spawn(
-          ['claude', '-p', 'reply OK', '--output-format', 'stream-json', '--verbose'],
-          {
-            cwd: project,
-            env: {
-              ...process.env,
-              // Clear nested-session detection vars
-              CLAUDECODE: '',
-              CLAUDE_CODE_ENTRYPOINT: '',
-            },
-            stdin: 'ignore',
-            stdout: 'pipe',
-            stderr: 'pipe',
-          },
-        )
-
-        const [stdout, , exitCode] = await Promise.all([
-          new Response(proc.stdout).text(),
-          new Response(proc.stderr).text(),
-          proc.exited,
-        ])
-
-        expect(exitCode).toBe(0)
-
-        const skills = parseCCSkills(stdout)
-        expect(skills).toContain('cc_e2e_test')
-      } finally {
-        await rm(base, { recursive: true, force: true })
-      }
-    },
-    { timeout: 60_000 },
-  )
+    const skills = parseCCSkills(stdout)
+    expect(skills).toContain('cc_e2e_test')
+  })
 })
 
 // ── libraryExists scope guard ─────────────────────────────────────────

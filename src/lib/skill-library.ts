@@ -35,37 +35,54 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import * as path from 'node:path'
+import {
+  AGENT_CACHE_TTL_MS,
+  AGENT_ORDER,
+  AGENT_PROBE_COMMANDS,
+  AGENT_ROOT_DIRS,
+  CANONICAL_AGENT as RUNTIME_CANONICAL_AGENT,
+  agentOutfitDirFor,
+  agentRootDirFor,
+  getRuntimeConfig,
+  onRuntimeConfigChange,
+} from './runtime-config.js'
 import * as SkillName from './skill-name.js'
 
 // ── Paths ──────────────────────────────────────────────────────────
 
-export const LIBRARY_DIR = path.join(homedir(), '.claude/skills-library')
-export const USER_OUTFIT_DIR = path.join(homedir(), '.claude/skills')
-export const SHAN_DIR = path.join(homedir(), '.claude/shan')
-export const CONFIG_DIR = path.join(homedir(), '.config/shan')
-export const CACHE_DIR = path.join(homedir(), '.local/shan')
-export const STATE_FILE = path.join(SHAN_DIR, 'state.json')
-export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
-export const CACHE_FILE = path.join(CACHE_DIR, 'cache.json')
-const USER_HOME = homedir()
-const LEGACY_CONFIG_FILE = path.join(SHAN_DIR, 'config.json')
+export let LIBRARY_DIR = ''
+export let USER_OUTFIT_DIR = ''
+export let SHAN_DIR = ''
+export let CONFIG_DIR = ''
+export let CACHE_DIR = ''
+export let STATE_FILE = ''
+export let CONFIG_FILE = ''
+export let CACHE_FILE = ''
+let LEGACY_CONFIG_FILE = ''
 // TODO: Make the canonical agent configurable once shan supports full multi-agent ownership.
-export const CANONICAL_AGENT = 'claude' as const
-const AGENT_ORDER = [CANONICAL_AGENT, 'codex'] as const
-const AGENT_PROBE_COMMANDS = {
-  claude: 'claude',
-  codex: 'codex',
-} as const
-const AGENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-const AGENT_ROOT_DIRS = {
-  claude: '.claude',
-  codex: '.codex',
-} as const
+export const CANONICAL_AGENT = RUNTIME_CANONICAL_AGENT
+
+const refreshRuntimePathBindings = () => {
+  const runtime = getRuntimeConfig()
+  LIBRARY_DIR = runtime.paths.userLibraryDir
+  USER_OUTFIT_DIR = runtime.paths.userClaudeSkillsDir
+  SHAN_DIR = runtime.paths.shanDir
+  CONFIG_DIR = runtime.paths.configDir
+  CACHE_DIR = runtime.paths.cacheDir
+  STATE_FILE = runtime.paths.stateFile
+  CONFIG_FILE = runtime.paths.configFile
+  CACHE_FILE = runtime.paths.cacheFile
+  LEGACY_CONFIG_FILE = runtime.paths.legacyConfigFile
+}
+
+refreshRuntimePathBindings()
+onRuntimeConfigChange(() => {
+  refreshRuntimePathBindings()
+})
 
 /** Project-level library. Evaluated lazily (depends on cwd). */
-export const projectLibraryDir = () => path.join(process.cwd(), '.claude/skills-library')
+export const projectLibraryDir = () => getRuntimeConfig().paths.projectLibraryDir
 
 /**
  * Library directories to search, in priority order.
@@ -109,7 +126,7 @@ export const resolveHistoryOutfitDir = (scopeKey: string): string =>
     ? outfitDir('user')
     : scopeKey === 'project'
       ? outfitDir('project')
-      : path.join(scopeKey, '.claude/skills')
+      : path.join(scopeKey, AGENT_ROOT_DIRS[CANONICAL_AGENT], 'skills')
 
 // ── Enums ──────────────────────────────────────────────────────────
 
@@ -540,13 +557,10 @@ export const normalizeAgents = (agents: readonly string[]): Agent[] => {
   return AGENT_ORDER.filter((agent) => unique.has(agent))
 }
 
-export const agentRootDir = (scope: Scope, agent: Agent): string =>
-  scope === 'user'
-    ? path.join(USER_HOME, AGENT_ROOT_DIRS[agent])
-    : path.join(process.cwd(), AGENT_ROOT_DIRS[agent])
+export const agentRootDir = (scope: Scope, agent: Agent): string => agentRootDirFor(scope, agent)
 
 export const agentOutfitDir = (scope: Scope, agent: Agent): string =>
-  path.join(agentRootDir(scope, agent), 'skills')
+  agentOutfitDirFor(scope, agent)
 
 export const getMirrorAgents = (agents: readonly Agent[]): Agent[] =>
   agents.filter((agent) => agent !== CANONICAL_AGENT)
@@ -803,7 +817,7 @@ export const saveState = (state: ShanState) =>
   })
 
 export const getProjectHistory = (state: ShanState, scope: Scope): ProjectHistory => {
-  const key = scope === 'user' ? 'global' : process.cwd()
+  const key = scope === 'user' ? 'global' : getRuntimeConfig().projectRoot
   return state.history[key] ?? { entries: [], undoneCount: 0 }
 }
 
@@ -812,13 +826,13 @@ export const setProjectHistory = (
   scope: Scope,
   history: ProjectHistory,
 ): ShanState => {
-  const key = scope === 'user' ? 'global' : process.cwd()
+  const key = scope === 'user' ? 'global' : getRuntimeConfig().projectRoot
   return { ...state, history: { ...state.history, [key]: history } }
 }
 
 /** Get the current install list for a scope key. */
 export const getCurrentInstalls = (state: ShanState, scope: Scope): string[] => {
-  const key = scope === 'user' ? 'global' : process.cwd()
+  const key = scope === 'user' ? 'global' : getRuntimeConfig().projectRoot
   return state.current[key]?.installs ?? []
 }
 
@@ -828,7 +842,7 @@ export const setCurrentInstalls = (
   scope: Scope,
   installs: string[],
 ): ShanState => {
-  const key = scope === 'user' ? 'global' : process.cwd()
+  const key = scope === 'user' ? 'global' : getRuntimeConfig().projectRoot
   return { ...state, current: { ...state.current, [key]: { installs } } }
 }
 
@@ -1134,7 +1148,7 @@ export const syncAgentMirrors = (scope: Scope, config?: ShanConfig) =>
         ...canonicalEntries,
         ...mirrorAgents.map((agent) => mirrorGitignoreEntry(agent)),
       ].sort()
-      yield* setGitignoreEntries(process.cwd(), gitignoreEntries)
+      yield* setGitignoreEntries(getRuntimeConfig().projectRoot, gitignoreEntries)
     }
   })
 
@@ -1702,7 +1716,7 @@ export const restoreSnapshot = (
     // Sync gitignore for project scope: set entries to match restored snapshot
     if (scope === 'project') {
       yield* setGitignoreEntries(
-        process.cwd(),
+        getRuntimeConfig().projectRoot,
         snapshot.map((n) => `.claude/skills/${n}`),
       )
     }

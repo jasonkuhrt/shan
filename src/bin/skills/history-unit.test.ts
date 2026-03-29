@@ -3,7 +3,8 @@ import { Effect } from 'effect'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 import { skillsHistory } from './history.js'
 import { skillsOn } from './on.js'
 import { skillsOff } from './off.js'
@@ -36,7 +37,7 @@ const setupProjectLibrary = async (...skills: string[]) => {
   }
 }
 
-const STATE_FILE = path.join(homedir(), '.claude', 'shan', 'state.json')
+const STATE_FILE = getRuntimeConfig().paths.stateFile
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? { ...value } : {}

@@ -15,6 +15,7 @@ import { Console, Effect } from 'effect'
 import { cp, lstat, mkdir, rename, symlink, unlink } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from '../../lib/skill-library.js'
+import { getRuntimeConfig } from '../../lib/runtime-config.js'
 
 export type MoveAxis = 'scope' | 'commitment'
 export type MoveDirection = 'up' | 'down'
@@ -488,7 +489,7 @@ const executeScopeUpCore = (src: string, dest: string, target: string) =>
   Effect.gen(function* () {
     yield* Lib.ensureOutfitDir(path.dirname(dest))
     yield* Effect.tryPromise(() => rename(src, dest))
-    yield* Lib.manageGitignoreRemove(process.cwd(), [
+    yield* Lib.manageGitignoreRemove(getRuntimeConfig().projectRoot, [
       `.claude/skills/${Lib.flattenName(Lib.colonToPath(target))}`,
     ])
   })
@@ -517,7 +518,7 @@ const executeScopeUpPluggableInstalled = (
     yield* Effect.tryPromise(() => symlink(libTarget, userOutfitPath))
     // Clean up gitignore entry from old project-scope install
     const flatName = Lib.flattenName(relPath)
-    yield* Lib.manageGitignoreRemove(process.cwd(), [`.claude/skills/${flatName}`])
+    yield* Lib.manageGitignoreRemove(getRuntimeConfig().projectRoot, [`.claude/skills/${flatName}`])
   })
 
 const executeMoveLibraryDir = (src: string, dest: string) =>
@@ -558,7 +559,7 @@ const executeScopeDownPluggable = (
     yield* Lib.ensureOutfitDir(path.dirname(projectOutfitPath))
     yield* Effect.tryPromise(() => symlink(projLibPath, projectOutfitPath))
     // Add gitignore entry for new project-scope skill
-    yield* Lib.manageGitignore(process.cwd(), [`.claude/skills/${flatName}`])
+    yield* Lib.manageGitignore(getRuntimeConfig().projectRoot, [`.claude/skills/${flatName}`])
   })
 
 const executeCommitmentUp = (
@@ -598,7 +599,7 @@ const executeCommitmentDown = (
     yield* Effect.tryPromise(() => symlink(libPath, outfitPath))
     // Update gitignore if project scope
     if (scope === 'project') {
-      yield* Lib.manageGitignore(process.cwd(), [`.claude/skills/${flatName}`])
+      yield* Lib.manageGitignore(getRuntimeConfig().projectRoot, [`.claude/skills/${flatName}`])
     }
   })
 
