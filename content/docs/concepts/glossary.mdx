@@ -1,32 +1,46 @@
 ---
 title: Glossary
-description: Definitions for outfit, library, core, pluggable, scope, commitment, and more.
+description: Definitions for dependencies, dependents, outfit, library, scope, commitment, and related terms.
 lucid_generated: true
-generated_at: '2026-03-16T00:00:00Z'
+generated_at: '2026-03-31T00:00:00Z'
 source_files:
   - src/lib/skill-library.ts
-  - src/bundled-skills/skills/change/SKILL.md
-  - docs/skills-move-design.md
+  - src/lib/skill-graph.ts
+  - src/bin/skills/on.ts
+  - src/bin/skills/off.ts
+  - src/bin/skills/move.ts
 ---
 
-**colon-syntax** — naming convention for hierarchical skills. `ts:tooling` means the `tooling` leaf inside the `ts` group. Targets use this form in all CLI commands.
+**cascade** — an `off` or `move` behavior that expands the original target set through the dependency graph. `skills off` defaults to cascading through dependents. `--cascade-dependencies` opts into cascading through dependencies.
 
-**commitment** — whether a skill is managed by shan. `pluggable` means shan controls it via symlinks. `core` means it's a real directory shan does not touch.
+**colon-syntax** — naming convention for hierarchical skills. `ts:tooling` means the `tooling` leaf inside the `ts` namespace. Targets use this form in all CLI commands and frontmatter dependency declarations.
 
-**core** — a real directory in the outfit. Shan never modifies, moves, or deletes core skills. They are always active.
+**commitment** — whether a skill is managed by shan. `pluggable` means shan controls it via symlinks. `core` means it is a real directory shan validates but does not manage as a pluggable install.
 
-**group** — a directory in the skill library that contains child skills. Targeting a group in a command includes all descendant leaf skills.
+**core** — a real directory in the outfit. Core skills are always active in that outfit and participate in dependency validation, dependent blocking, and graph visualization.
 
-**leaf** — a skill at the bottom of the hierarchy — a directory containing a `SKILL.md` file with no child skills.
+**dependency** — a skill that another skill needs. Skills declare dependencies in frontmatter with `dependencies: [...]`. A dependency may target a standalone skill or a namespace root.
+
+**dependency closure** — the full transitive set reached by recursively following a skill's dependencies. `skills on` auto-activates the missing dependency closure by default. `skills list` reports both a skill's own cost and its dependency-closure cost.
+
+**dependent** — an active skill that needs another active skill. `skills off` cascades through dependents by default unless you pass `--fail-on-dependents`.
+
+**graph drift** — a mismatch between declared dependencies and the active outfit, such as an active skill whose dependency is missing. `doctor skills` reports graph drift and can auto-fix the repairable cases by activating the missing dependency closure.
 
 **library** — the directory storing all available pluggable skills. `~/.claude/skills-library/` at user scope, `.claude/skills-library/` at project scope.
 
+**namespace root** — a top-level or nested skill name that owns descendant leaves, such as `skills` or `ts`. Dependency declarations may target a namespace root, which means all current descendants of that namespace at command time.
+
 **outfit** — the set of active skills Claude Code loads on startup. `~/.claude/skills/` at user scope, `.claude/skills/` at project scope. Contains symlinks (pluggable) and real directories (core).
 
-**pluggable** — a skill managed by shan as a symlink from the outfit to the library. Can be toggled on (symlink exists) or off (symlink removed).
+**pluggable** — a skill managed by shan as a symlink from the outfit to the library. It can be turned on, turned off, moved between scopes, or moved between commitments.
 
-**router** — a generated `SKILL.md` inside a group directory in the outfit. Routes Claude Code to the group's child skills.
+**reaching inside a namespace** — declaring a dependency on part of a namespace instead of the namespace root. If `foo` is itself a namespace root, `foo:bar` is an illegal dependency target. Doctor reports this as an invalid declaration.
 
-**scope** — `user` (global, `~/.claude/`) or `project` (repo-local, `.claude/`). Most commands default to project scope. Use `--scope user` or `--global` for user scope.
+**router** — a generated `SKILL.md` inside an outfit directory for a pure namespace root. Routers expose grouped leaves to the agent without changing the underlying library shape.
 
-**snapshot** — the recorded state of an outfit directory before a mutation. Shan stores snapshots in `state.json` so `undo` can restore the exact prior state.
+**scope** — `user` (global, `~/.claude/`) or `project` (repo-local, `.claude/`). Commands usually target one initial scope, but dependency and dependent cascades may cross scopes when the validated graph requires it.
+
+**shadowing** — when the same colon-syntax skill name exists in both project and user libraries. Shadowing is allowed. Resolution is deterministic: project-first for project commands, user-only for user commands.
+
+**snapshot** — the recorded state of an outfit directory before a mutation. Shan stores snapshots in `state.json` so `undo` and `redo` can restore the exact filesystem state without tracking why a skill was active.

@@ -9,6 +9,10 @@ import { skillsOn } from './on.js'
 import { skillsUndo } from './undo.js'
 import { registerStateFileRestore } from './test-state.js'
 import * as Lib from '../../lib/skill-library.js'
+import {
+  resetRuntimeConfigOverrides,
+  replaceRuntimeConfigOverrides,
+} from '../../lib/runtime-config.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
@@ -34,6 +38,27 @@ const setupProjectLibrary = async (...skills: string[]) => {
     await mkdir(skillDir, { recursive: true })
     await writeFile(path.join(skillDir, 'SKILL.md'), SKILL_MD(skill))
   }
+}
+
+const writeProjectSkill = async (
+  relPath: string,
+  options: {
+    readonly dependencies?: readonly string[]
+    readonly description?: string
+    readonly name?: string
+  } = {},
+) => {
+  const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+  const skillDir = path.join(libDir, relPath)
+  const name = options.name ?? relPath.replaceAll('/', ':')
+  const dependencies = options.dependencies
+    ? `dependencies:\n${options.dependencies.map((dependency) => `  - ${dependency}`).join('\n')}\n`
+    : ''
+  await mkdir(skillDir, { recursive: true })
+  await writeFile(
+    path.join(skillDir, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: ${options.description ?? `Test skill ${name}`}\n${dependencies}---\n\n# ${name}\n`,
+  )
 }
 
 beforeEach(async () => {
@@ -203,6 +228,14 @@ describe('skillsOff', () => {
     expect((await lstat(linkPath)).isSymbolicLink()).toBe(true)
   })
 
+  test('strict mode aborts when a selected target is already off', async () => {
+    await setupProjectLibrary('strict-off-skill')
+
+    await expect(
+      run(skillsOff('strict-off-skill', { scope: 'project', strict: true })),
+    ).rejects.toThrow('Some targets failed')
+  })
+
   test('off after undo trims undone history entries', async () => {
     await setupProjectLibrary('trim-off-a', 'trim-off-b')
     await run(skillsOn('trim-off-a', { scope: 'project', strict: false }))
@@ -276,6 +309,26 @@ describe('skillsOff', () => {
     }
   })
 
+  test('cleanupRouter removes callable-group routers directly', async () => {
+    const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+    const libraryDir = path.join(TEMP_DIR, '.claude', 'skills-library', 'callable-router')
+    await mkdir(path.join(libraryDir, 'leaf'), { recursive: true })
+    await writeFile(
+      path.join(libraryDir, 'SKILL.md'),
+      '---\nname: callable-router\ndescription: Callable router\n---\n# callable-router\n',
+    )
+    await writeFile(
+      path.join(libraryDir, 'leaf', 'SKILL.md'),
+      '---\nname: "callable-router:leaf"\ndescription: Leaf\n---\n# leaf\n',
+    )
+    await mkdir(path.join(outfitDir, 'callable-router'), { recursive: true })
+    await writeFile(path.join(outfitDir, 'callable-router', 'SKILL.md'), '# router')
+
+    await run(cleanupRouter(outfitDir, 'callable-router', 'project'))
+
+    await expect(lstat(path.join(outfitDir, 'callable-router'))).rejects.toThrow()
+  })
+
   test('cleanupRouter leaves unrelated directories alone when no matching library group exists', async () => {
     const routerPath = path.join(TEMP_DIR, '.claude', 'skills', '__cleanup_router_no_group__')
     await mkdir(routerPath, { recursive: true })
@@ -298,14 +351,17 @@ describe('skillsOff', () => {
 
     const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
 
-    // Make outfit dir read-only so unlink fails (triggers catchAll)
+    // Make outfit dir read-only so unlink fails. The operation should abort and
+    // roll back to the previous snapshot instead of partially mutating.
     await chmod(outfitDir, 0o555)
     try {
-      // Reset all — unlinks fail due to permissions → catchAll(() => Effect.void) fires
-      await run(skillsOff('', { scope: 'project', strict: false }))
+      await expect(run(skillsOff('', { scope: 'project', strict: false }))).rejects.toThrow()
     } finally {
       await chmod(outfitDir, 0o755)
     }
+
+    expect((await lstat(path.join(outfitDir, 'ro-skill-a'))).isSymbolicLink()).toBe(true)
+    expect((await lstat(path.join(outfitDir, 'ro-skill-b'))).isSymbolicLink()).toBe(true)
   })
 
   test('cleanupRouter catchAll handles rm failure on read-only outfit', async () => {
@@ -437,5 +493,148 @@ describe('skillsOff', () => {
         // Expected — removed
       }
     }
+  })
+
+  test('default off cascades through active dependents', async () => {
+    await writeProjectSkill('base')
+    await writeProjectSkill('consumer', { dependencies: ['base'] })
+    await run(skillsOn('consumer', { scope: 'project', strict: false }))
+
+    await run(skillsOff('base', { scope: 'project', strict: false }))
+
+    await expect(lstat(path.join(TEMP_DIR, '.claude', 'skills', 'base'))).rejects.toThrow()
+    await expect(lstat(path.join(TEMP_DIR, '.claude', 'skills', 'consumer'))).rejects.toThrow()
+  })
+
+  test('fail-on-dependents blocks when active dependents remain', async () => {
+    await writeProjectSkill('base')
+    await writeProjectSkill('consumer', { dependencies: ['base'] })
+    await run(skillsOn('consumer', { scope: 'project', strict: false }))
+
+    await expect(
+      run(
+        skillsOff('base', {
+          failOnDependents: true,
+          scope: 'project',
+          strict: false,
+        }),
+      ),
+    ).rejects.toThrow('Some targets failed')
+
+    expect((await lstat(path.join(TEMP_DIR, '.claude', 'skills', 'base'))).isSymbolicLink()).toBe(
+      true,
+    )
+    expect(
+      (await lstat(path.join(TEMP_DIR, '.claude', 'skills', 'consumer'))).isSymbolicLink(),
+    ).toBe(true)
+  })
+
+  test('cascade-dependencies removes transitive dependencies of selected skill', async () => {
+    await writeProjectSkill('base')
+    await writeProjectSkill('consumer', { dependencies: ['base'] })
+    await run(skillsOn('consumer', { scope: 'project', strict: false }))
+
+    await run(
+      skillsOff('consumer', {
+        cascadeDependencies: true,
+        scope: 'project',
+        strict: false,
+      }),
+    )
+
+    await expect(lstat(path.join(TEMP_DIR, '.claude', 'skills', 'base'))).rejects.toThrow()
+    await expect(lstat(path.join(TEMP_DIR, '.claude', 'skills', 'consumer'))).rejects.toThrow()
+  })
+
+  test('without cascade-dependencies shared dependencies remain active', async () => {
+    await writeProjectSkill('shared-base')
+    await writeProjectSkill('first-consumer', { dependencies: ['shared-base'] })
+    await writeProjectSkill('second-consumer', { dependencies: ['shared-base'] })
+    await run(skillsOn('first-consumer,second-consumer', { scope: 'project', strict: false }))
+
+    await run(skillsOff('first-consumer', { scope: 'project', strict: false }))
+
+    await expect(
+      lstat(path.join(TEMP_DIR, '.claude', 'skills', 'first-consumer')),
+    ).rejects.toThrow()
+    expect(
+      (await lstat(path.join(TEMP_DIR, '.claude', 'skills', 'shared-base'))).isSymbolicLink(),
+    ).toBe(true)
+    expect(
+      (await lstat(path.join(TEMP_DIR, '.claude', 'skills', 'second-consumer'))).isSymbolicLink(),
+    ).toBe(true)
+  })
+
+  test('sorts removed skills across scopes when a cross-scope dependent cascades', async () => {
+    const homeDir = path.join(TEMP_DIR, 'off-home-cross-scope')
+    await mkdir(homeDir, { recursive: true })
+    replaceRuntimeConfigOverrides({ homeDir, projectRoot: TEMP_DIR })
+
+    try {
+      const userLibDir = path.join(homeDir, '.claude', 'skills-library')
+      await mkdir(path.join(userLibDir, 'shared-base'), { recursive: true })
+      await writeFile(path.join(userLibDir, 'shared-base', 'SKILL.md'), SKILL_MD('shared-base'))
+      await writeProjectSkill('project-consumer', { dependencies: ['shared-base'] })
+
+      await run(skillsOn('project-consumer', { scope: 'project', strict: false }))
+      await run(skillsOff('shared-base', { scope: 'user', strict: false }))
+
+      await expect(lstat(path.join(homeDir, '.claude', 'skills', 'shared-base'))).rejects.toThrow()
+      await expect(
+        lstat(path.join(TEMP_DIR, '.claude', 'skills', 'project-consumer')),
+      ).rejects.toThrow()
+    } finally {
+      resetRuntimeConfigOverrides()
+      await rm(homeDir, { recursive: true, force: true })
+    }
+  })
+
+  test('default dependent cascade blocks when the dependent is core', async () => {
+    await writeProjectSkill('core-base')
+    await run(skillsOn('core-base', { scope: 'project', strict: false }))
+
+    const coreDependentDir = path.join(TEMP_DIR, '.claude', 'skills', 'core-dependent')
+    await mkdir(coreDependentDir, { recursive: true })
+    await writeFile(
+      path.join(coreDependentDir, 'SKILL.md'),
+      `---\nname: core-dependent\ndescription: Core dependent\ndependencies:\n  - core-base\n---\n\n# core-dependent\n`,
+    )
+
+    await expect(run(skillsOff('core-base', { scope: 'project', strict: false }))).rejects.toThrow(
+      'Some targets failed',
+    )
+
+    expect(
+      (await lstat(path.join(TEMP_DIR, '.claude', 'skills', 'core-base'))).isSymbolicLink(),
+    ).toBe(true)
+    expect((await lstat(coreDependentDir)).isDirectory()).toBe(true)
+  })
+
+  test('cascade-dependencies blocks when the dependency is core', async () => {
+    const coreDependencyDir = path.join(TEMP_DIR, '.claude', 'skills', 'core-required')
+    await mkdir(coreDependencyDir, { recursive: true })
+    await writeFile(
+      path.join(coreDependencyDir, 'SKILL.md'),
+      '---\nname: core-required\ndescription: Core dependency\n---\n\n# core-required\n',
+    )
+    await writeProjectSkill('consumer-needing-core', { dependencies: ['core-required'] })
+    await run(skillsOn('consumer-needing-core', { scope: 'project', strict: false }))
+
+    await expect(
+      run(
+        skillsOff('consumer-needing-core', {
+          cascadeDependencies: true,
+          scope: 'project',
+          strict: false,
+        }),
+      ),
+    ).rejects.toThrow('Some targets failed')
+
+    expect(
+      (
+        await lstat(path.join(TEMP_DIR, '.claude', 'skills', 'consumer-needing-core'))
+      ).isSymbolicLink(),
+    ).toBe(true)
+    expect((await lstat(coreDependencyDir)).isDirectory()).toBe(true)
   })
 })

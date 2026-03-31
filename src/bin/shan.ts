@@ -65,8 +65,8 @@ Commands:
   shan task open [target]               Open task list or file in editor
 
   shan skills | shan s                  Show outfit (default: list)
-  shan skills on <targets>              Turn on skills/groups (comma-separated)
-  shan skills off [targets]             Turn off skills/groups (no targets = reset all)
+  shan skills on <targets>              Turn on skills/groups (auto-activates dependencies)
+  shan skills off [targets]             Turn off skills/groups (default cascades dependents)
   shan skills move <axis> <dir> <tgt>   Migrate between scopes or commitments
   shan skills list                      Show effective outfit across all layers
   shan skills history                   Show operation log
@@ -83,6 +83,11 @@ Options:
   --scope user         Operate on user outfit (default: project)
   --global             Alias for --scope user
   --strict             Report no-ops as errors
+  --fail-on-missing-dependencies
+                       Refuse \`skills on\` when dependencies would be auto-activated
+  --cascade-dependencies
+                       Also remove/move dependency closures when supported
+  --fail-on-dependents Refuse \`skills off\` when active dependents would cascade
 
 Transcript target:
   - Session ID (or prefix): abc123, 9ba30f6f-...
@@ -98,8 +103,8 @@ Task target:
 
 const SKILLS_USAGE = `
 Available commands:
-  on <targets>              Turn on skills/groups (comma-separated)
-  off [targets]             Turn off skills/groups (no targets = reset all)
+  on <targets>              Turn on skills/groups (auto-activates dependencies)
+  off [targets]             Turn off skills/groups (default cascades dependents)
   move <axis> <dir> <tgt>   Migrate between scopes or commitments
   list                      Show effective outfit across all layers
   history                   Show operation log
@@ -114,6 +119,10 @@ Options:
   --scope user | --global   Operate on user outfit (default: project)
   --strict                  Report no-ops as errors
   --skill <name>            Select specific skills for skills install
+  --fail-on-missing-dependencies
+                            Refuse \`skills on\` when dependencies would be auto-activated
+  --cascade-dependencies    Also remove/move dependency closures when supported
+  --fail-on-dependents      Refuse \`skills off\` when active dependents would cascade
 `.trim()
 
 /**
@@ -122,8 +131,11 @@ Options:
 export interface ParsedFlags {
   raw: boolean
   all: boolean
+  cascadeDependencies: boolean
   md: boolean
   execute: boolean
+  failOnDependents: boolean
+  failOnMissingDependencies: boolean
   strict: boolean
   global: boolean
   noFix: boolean
@@ -136,8 +148,11 @@ export const parseArgs = (args: string[]) => {
   const flags: ParsedFlags = {
     raw: false,
     all: false,
+    cascadeDependencies: false,
     md: false,
     execute: false,
+    failOnDependents: false,
+    failOnMissingDependencies: false,
     strict: false,
     global: false,
     noFix: false,
@@ -152,8 +167,11 @@ export const parseArgs = (args: string[]) => {
     if (!arg) continue
     if (arg === '--raw') flags.raw = true
     else if (arg === '--all') flags.all = true
+    else if (arg === '--cascade-dependencies') flags.cascadeDependencies = true
     else if (arg === '--md') flags.md = true
     else if (arg === '--execute') flags.execute = true
+    else if (arg === '--fail-on-dependents') flags.failOnDependents = true
+    else if (arg === '--fail-on-missing-dependencies') flags.failOnMissingDependencies = true
     else if (arg === '--strict') flags.strict = true
     else if (arg === '--global') flags.global = true
     else if (arg === '--no-fix') flags.noFix = true
@@ -185,6 +203,21 @@ const resolveAllTargetsInScope = (targets: readonly string[], scope: Scope) =>
     return true
   })
 
+const resolveAllTargetsInOutfit = (targets: readonly string[], scope: Scope) =>
+  Effect.gen(function* () {
+    const outfit = yield* Lib.listOutfit(scope)
+    const outfitNames = new Set(outfit.map((entry) => entry.name))
+
+    for (const target of targets) {
+      const flatName = yield* Effect.try(() => Lib.flattenName(Lib.colonToPath(target))).pipe(
+        Effect.catchAll(() => Effect.succeed(null)),
+      )
+      if (!flatName || !outfitNames.has(flatName)) return false
+    }
+
+    return true
+  })
+
 export const resolveSkillsOnScope = (flags: ParsedFlags, targetInput: string) =>
   Effect.gen(function* () {
     if (flags.global || flags.scope === 'user') return 'user' as const
@@ -207,11 +240,27 @@ export const resolveSkillsOnScope = (flags: ParsedFlags, targetInput: string) =>
 
 const historyCommands = new Set(['undo', 'redo', 'history'])
 
+export const resolveSkillsOffScope = (flags: ParsedFlags, targetInput: string) =>
+  Effect.gen(function* () {
+    if (flags.global || flags.scope === 'user') return 'user' as const
+    if (flags.scope === 'project') return 'project' as const
+
+    const targets = Lib.parseTargets(targetInput)
+    if (targets.length === 0) return 'project' as const
+
+    if (yield* resolveAllTargetsInOutfit(targets, 'project')) return 'project' as const
+    if (yield* resolveAllTargetsInOutfit(targets, 'user')) return 'user' as const
+    if (yield* resolveAllTargetsInScope(targets, 'project')) return 'project' as const
+    if (yield* resolveAllTargetsInScope(targets, 'user')) return 'user' as const
+
+    return 'project' as const
+  })
+
 /**
  * Unified scope resolver for all skills subcommands.
  *
  * - Explicit --scope / --global flags always win.
- * - Target-based commands (on, off, move, etc.) infer scope from where the target lives.
+ * - `on` infers scope from library visibility.
  * - History commands (undo, redo, history) with no explicit scope check which scope
  *   has active history entries and prefer that. Falls back to project if both or neither have history.
  */
@@ -246,8 +295,52 @@ export const resolveSkillsScope = (flags: ParsedFlags, command: string, targetIn
       return 'project' as const
     }
 
-    // Target-based commands: infer from where the target lives
-    return yield* resolveSkillsOnScope(flags, targetInput)
+    if (command === 'on') {
+      return yield* resolveSkillsOnScope(flags, targetInput)
+    }
+
+    const targets = Lib.parseTargets(targetInput)
+    if (targets.length === 0) return 'project' as const
+
+    if (yield* resolveAllTargetsInScope(targets, 'project')) return 'project' as const
+    if (yield* resolveAllTargetsInScope(targets, 'user')) return 'user' as const
+    if (yield* resolveAllTargetsInOutfit(targets, 'project')) return 'project' as const
+    if (yield* resolveAllTargetsInOutfit(targets, 'user')) return 'user' as const
+
+    return 'project' as const
+  })
+
+export const resolveSkillsMoveScope = (
+  flags: ParsedFlags,
+  axis: MoveAxis,
+  direction: MoveDirection,
+  targetInput: string,
+) =>
+  Effect.gen(function* () {
+    if (flags.global || flags.scope === 'user') return 'user' as const
+    if (flags.scope === 'project') return 'project' as const
+
+    const targets = Lib.parseTargets(targetInput)
+    if (targets.length === 0) return 'project' as const
+
+    if (axis === 'scope') {
+      return direction === 'up' ? ('project' as const) : ('user' as const)
+    }
+
+    if (direction === 'up') {
+      if (yield* resolveAllTargetsInOutfit(targets, 'project')) return 'project' as const
+      if (yield* resolveAllTargetsInOutfit(targets, 'user')) return 'user' as const
+      if (yield* resolveAllTargetsInScope(targets, 'project')) return 'project' as const
+      if (yield* resolveAllTargetsInScope(targets, 'user')) return 'user' as const
+      return 'project' as const
+    }
+
+    if (yield* resolveAllTargetsInOutfit(targets, 'project')) return 'project' as const
+    if (yield* resolveAllTargetsInOutfit(targets, 'user')) return 'user' as const
+    if (yield* resolveAllTargetsInScope(targets, 'project')) return 'project' as const
+    if (yield* resolveAllTargetsInScope(targets, 'user')) return 'user' as const
+
+    return 'project' as const
   })
 
 const removedCommand = (removed: string, replacement: string, detail: string) =>
@@ -312,13 +405,22 @@ export const program = Effect.gen(function* () {
     }
   } else if (namespace === 'skills' || namespace === 's') {
     const { flags, positional } = parseArgs(args)
-    const targetInput = command === 'move' ? (positional[2] ?? '') : (positional[0] ?? '')
-    const scope = yield* resolveSkillsScope(flags, command ?? '', targetInput)
 
     if (command === 'on') {
-      yield* skillsOn(positional[0] ?? '', { scope, strict: flags.strict })
+      const scope = yield* resolveSkillsScope(flags, command, positional[0] ?? '')
+      yield* skillsOn(positional[0] ?? '', {
+        scope,
+        strict: flags.strict,
+        failOnMissingDependencies: flags.failOnMissingDependencies,
+      })
     } else if (command === 'off') {
-      yield* skillsOff(positional[0] ?? '', { scope, strict: flags.strict })
+      const scope = yield* resolveSkillsOffScope(flags, positional[0] ?? '')
+      yield* skillsOff(positional[0] ?? '', {
+        scope,
+        strict: flags.strict,
+        cascadeDependencies: flags.cascadeDependencies,
+        failOnDependents: flags.failOnDependents,
+      })
     } else if (command === 'move') {
       const axisInput = positional[0]
       const directionInput = positional[1]
@@ -329,14 +431,22 @@ export const program = Effect.gen(function* () {
         yield* Console.error('Usage: shan skills move <scope|commitment> <up|down> <targets>')
         return yield* Effect.fail(new Error('Missing targets'))
       }
-      yield* skillsMove(axisInput, directionInput, moveTargets, { scope, strict: flags.strict })
+      const scope = yield* resolveSkillsMoveScope(flags, axisInput, directionInput, moveTargets)
+      yield* skillsMove(axisInput, directionInput, moveTargets, {
+        scope,
+        strict: flags.strict,
+        cascadeDependencies: flags.cascadeDependencies,
+      })
     } else if (command === 'list' || !command) {
       yield* skillsList()
     } else if (command === 'history') {
+      const scope = yield* resolveSkillsScope(flags, command, '')
       yield* skillsHistory(scope)
     } else if (command === 'undo') {
+      const scope = yield* resolveSkillsScope(flags, command, '')
       yield* skillsUndo(Number(positional[0]) || 1, scope)
     } else if (command === 'redo') {
+      const scope = yield* resolveSkillsScope(flags, command, '')
       yield* skillsRedo(Number(positional[0]) || 1, scope)
     } else if (command === 'doctor') {
       return yield* removedCommand(
@@ -347,8 +457,10 @@ export const program = Effect.gen(function* () {
     } else if (command === 'migrate') {
       yield* skillsMigrate({ execute: flags.execute })
     } else if (command === 'create') {
+      const scope = yield* resolveSkillsScope(flags, command, positional[0] ?? '')
       yield* skillsCreate(positional[0] ?? '', { scope })
     } else if (command === 'install') {
+      const scope = yield* resolveSkillsScope(flags, command, positional[0] ?? '')
       yield* skillsInstall(positional[0] ?? '', {
         scope,
         all: flags.all,

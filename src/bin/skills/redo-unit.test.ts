@@ -1,10 +1,15 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { chmod, lstat, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
-import { getRuntimeConfig } from '../../lib/runtime-config.js'
+import {
+  getRuntimeConfig,
+  resetRuntimeConfigOverrides,
+  replaceRuntimeConfigOverrides,
+} from '../../lib/runtime-config.js'
+import * as Lib from '../../lib/skill-library.js'
 import { skillsRedo } from './redo.js'
 import { skillsUndo } from './undo.js'
 import { skillsOn } from './on.js'
@@ -75,6 +80,17 @@ const writeProjectHistory = async (
 
   await mkdir(path.dirname(STATE_FILE), { recursive: true })
   await writeFile(STATE_FILE, JSON.stringify(state, null, 2))
+}
+
+const withIsolatedHome = async (runTest: (homeDir: string) => Promise<void>) => {
+  const homeDir = await mkdtemp(path.join(TEMP_DIR, 'home-'))
+  replaceRuntimeConfigOverrides({ homeDir, projectRoot: TEMP_DIR })
+  try {
+    await runTest(homeDir)
+  } finally {
+    resetRuntimeConfigOverrides()
+    await rm(homeDir, { recursive: true, force: true })
+  }
 }
 
 beforeEach(async () => {
@@ -278,6 +294,45 @@ describe.serial('skillsRedo', () => {
     }
   })
 
+  test('redoes a reset-all history entry by removing generated routers directly', async () => {
+    const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+    const leafDir = path.join(libDir, 'redo-router-direct', 'leaf')
+    await mkdir(leafDir, { recursive: true })
+    await writeFile(
+      path.join(leafDir, 'SKILL.md'),
+      '---\nname: "redo-router-direct:leaf"\ndescription: Router leaf\n---\n# leaf\n',
+    )
+
+    const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+    await mkdir(outfitDir, { recursive: true })
+    await symlink(leafDir, path.join(outfitDir, 'redo-router-direct_leaf'))
+    await mkdir(path.join(outfitDir, 'redo-router-direct'), { recursive: true })
+    await writeFile(
+      path.join(outfitDir, 'redo-router-direct', 'SKILL.md'),
+      '---\nname: redo-router-direct\ndescription: Router\ndisable-model-invocation: true\n---\n# router\n',
+    )
+
+    await withSavedState(async () => {
+      const savedState = await run(Lib.loadState())
+      await writeProjectHistory(
+        Lib.OffOp({
+          generatedRouters: [],
+          scope: 'project',
+          snapshot: [],
+          targets: [],
+          timestamp: new Date().toISOString(),
+        }),
+        1,
+        savedState as unknown as Record<string, unknown>,
+      )
+
+      await run(skillsRedo(1, 'project'))
+    })
+
+    await expect(lstat(path.join(outfitDir, 'redo-router-direct_leaf'))).rejects.toThrow()
+    await expect(lstat(path.join(outfitDir, 'redo-router-direct'))).rejects.toThrow()
+  })
+
   test('redoes on-op when library has been removed', async () => {
     await setupProjectLibrary('redo-vanished')
     await run(skillsOn('redo-vanished', { scope: 'project', strict: false }))
@@ -459,6 +514,44 @@ describe.serial('skillsRedo', () => {
     }
   })
 
+  test('redoes a scope-up move for a core skill by replaying MoveDirOp', async () => {
+    await withIsolatedHome(async (homeDir) => {
+      const projectCorePath = path.join(TEMP_DIR, '.claude', 'skills', 'redo-scope-core')
+      await mkdir(projectCorePath, { recursive: true })
+      await writeFile(path.join(projectCorePath, 'SKILL.md'), SKILL_MD('redo-scope-core'))
+
+      await run(skillsMove('scope', 'up', 'redo-scope-core', { scope: 'project', strict: false }))
+      await run(skillsUndo(1, 'project'))
+      await run(skillsRedo(1, 'project'))
+
+      const userPath = path.join(homeDir, '.claude', 'skills', 'redo-scope-core')
+      const stat = await lstat(userPath)
+      expect(stat.isDirectory()).toBe(true)
+      expect(stat.isSymbolicLink()).toBe(false)
+    })
+  })
+
+  test('redoes a scope-up move for a library-only pluggable by replaying MoveLibraryDirOp', async () => {
+    await withIsolatedHome(async (homeDir) => {
+      await setupProjectLibrary('redo-scope-library-only')
+
+      await run(
+        skillsMove('scope', 'up', 'redo-scope-library-only', {
+          scope: 'project',
+          strict: false,
+        }),
+      )
+      await run(skillsUndo(1, 'project'))
+      await run(skillsRedo(1, 'project'))
+
+      expect(
+        (
+          await lstat(path.join(homeDir, '.claude', 'skills-library', 'redo-scope-library-only'))
+        ).isDirectory(),
+      ).toBe(true)
+    })
+  })
+
   test('redoes targeted off-op with multiple targets', async () => {
     await setupProjectLibrary('redo-off-x', 'redo-off-y')
     await run(skillsOn('redo-off-x,redo-off-y', { scope: 'project', strict: false }))
@@ -478,6 +571,44 @@ describe.serial('skillsRedo', () => {
         // Expected — removed
       }
     }
+  })
+
+  test('warns and continues when replaying an unsupported move sub-action', async () => {
+    await withSavedState(async () => {
+      const output: string[] = []
+      const origError = console.error
+      console.error = (...args: unknown[]) => {
+        output.push(args.map(String).join(' '))
+      }
+
+      try {
+        const savedState = await run(Lib.loadState())
+        await writeProjectHistory(
+          Lib.MoveOp({
+            axis: 'scope',
+            direction: 'up',
+            scope: 'project',
+            subActions: [
+              Lib.DoctorOp({
+                scope: 'project',
+                targets: [],
+                timestamp: new Date().toISOString(),
+              }),
+            ],
+            targets: ['unsupported-sub-action'],
+            timestamp: new Date().toISOString(),
+          }),
+          1,
+          savedState as unknown as Record<string, unknown>,
+        )
+
+        await run(skillsRedo(1, 'project'))
+      } finally {
+        console.error = origError
+      }
+
+      expect(output.join('\n')).toContain('redo for sub-action DoctorOp not yet implemented')
+    })
   })
 
   test('redoes reset-all off with read-only outfit (unlink catchAll)', async () => {
@@ -751,5 +882,111 @@ describe.serial('skillsRedo', () => {
     } finally {
       await writeFile(STATE_FILE, JSON.stringify(saved, null, 2))
     }
+  })
+
+  test('redoes graph operations by restoring after snapshots', async () => {
+    await withSavedState(async () => {
+      await setupProjectLibrary('redo-graph-skill')
+      await mkdir(path.join(TEMP_DIR, '.claude', 'skills'), { recursive: true })
+      const savedState = JSON.parse(
+        await readFile(STATE_FILE, 'utf-8').catch(() => '{}'),
+      ) as Record<string, unknown>
+
+      await writeProjectHistory(
+        Lib.GraphOp({
+          kind: 'on',
+          scope: 'project',
+          timestamp: new Date().toISOString(),
+          targets: ['redo-graph-skill'],
+          snapshots: [
+            {
+              afterGeneratedRouters: [],
+              afterSnapshot: ['redo-graph-skill'],
+              beforeGeneratedRouters: [],
+              beforeSnapshot: [],
+              scope: 'project',
+            },
+          ],
+        }),
+        1,
+        savedState,
+      )
+
+      await run(skillsRedo(1, 'project'))
+
+      expect(
+        (
+          await lstat(path.join(TEMP_DIR, '.claude', 'skills', 'redo-graph-skill'))
+        ).isSymbolicLink(),
+      ).toBe(true)
+    })
+  })
+
+  test('redoes move on-op sub-actions when the backing library has disappeared', async () => {
+    await withSavedState(async () => {
+      await setupProjectLibrary('redo-move-on-missing-lib')
+      const savedState = JSON.parse(
+        await readFile(STATE_FILE, 'utf-8').catch(() => '{}'),
+      ) as Record<string, unknown>
+      const libPath = path.join(TEMP_DIR, '.claude', 'skills-library', 'redo-move-on-missing-lib')
+      await rm(libPath, { recursive: true, force: true })
+
+      await writeProjectHistory(
+        Lib.MoveOp({
+          axis: 'commitment',
+          direction: 'down',
+          scope: 'project',
+          subActions: [
+            Lib.OnOp({
+              generatedRouters: [],
+              scope: 'project',
+              snapshot: [],
+              targets: ['redo-move-on-missing-lib'],
+              timestamp: new Date().toISOString(),
+            }),
+          ],
+          targets: ['redo-move-on-missing-lib'],
+          timestamp: new Date().toISOString(),
+        }),
+        1,
+        savedState,
+      )
+
+      await run(skillsRedo(1, 'project'))
+
+      await expect(
+        lstat(path.join(TEMP_DIR, '.claude', 'skills', 'redo-move-on-missing-lib')),
+      ).rejects.toThrow()
+    })
+  })
+
+  test('replays a legacy OffOp reset-all history entry directly', async () => {
+    await setupProjectLibrary('legacy-reset-a', 'legacy-reset-b')
+    await run(skillsOn('legacy-reset-a,legacy-reset-b', { scope: 'project', strict: false }))
+
+    const savedState = JSON.parse(await readFile(STATE_FILE, 'utf-8').catch(() => '{}')) as Record<
+      string,
+      unknown
+    >
+    await writeProjectHistory(
+      Lib.OffOp({
+        generatedRouters: [],
+        scope: 'project',
+        snapshot: [],
+        targets: [],
+        timestamp: new Date().toISOString(),
+      }),
+      1,
+      savedState,
+    )
+
+    await run(skillsRedo(1, 'project'))
+
+    await expect(
+      lstat(path.join(TEMP_DIR, '.claude', 'skills', 'legacy-reset-a')),
+    ).rejects.toThrow()
+    await expect(
+      lstat(path.join(TEMP_DIR, '.claude', 'skills', 'legacy-reset-b')),
+    ).rejects.toThrow()
   })
 })

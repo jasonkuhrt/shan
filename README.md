@@ -37,8 +37,9 @@ shan skills install vercel-labs/agent-skills --skill typed-api-dx-review
 ```
 
 - `skills list` shows the effective outfit, budget usage, and any configured agent mirrors.
+- `skills list` also shows each active skill's own cost, dependency-closure cost, and an ASCII dependency graph.
 - `skills install` imports external `skills.sh` skills into shan's own library/outfit model.
-- `doctor skills` audits and repairs skill drift, including missing or messy Codex mirrors.
+- `doctor skills` audits and repairs skill drift, including dependency graph drift and missing or messy Codex mirrors.
 - `doctor config` checks Claude settings for path hazards such as relative hook commands.
 
 ## Commands
@@ -73,9 +74,12 @@ shan task open [target]                        # open in $EDITOR
 shan skills                                    # show outfit (default: list)
 shan s                                         # alias for skills
 shan skills on playwright,linear               # turn on skills
+shan skills on dispatch --fail-on-missing-dependencies
 shan skills off ts                             # turn off a group
+shan skills off cmux --fail-on-dependents
+shan skills off dispatch --cascade-dependencies
 shan skills off                                # reset: off all pluggable
-shan skills move scope up playwright           # project → user library
+shan skills move scope up dispatch --cascade-dependencies
 shan skills move commitment down playwright    # core → pluggable
 shan skills history                            # operation log
 shan skills undo                               # undo last operation
@@ -112,7 +116,19 @@ Skill targets: comma-separated colon-syntax names (e.g. `ts:tooling,playwright`)
 
 **Commitment** — `core` means a real directory in the outfit that shan leaves alone. `pluggable` means a symlink managed by shan.
 
-Every mutation records a snapshot for `undo`/`redo`. `doctor` runs 14 diagnostic aspects with auto-fix by default.
+**Dependency** — a skill that another skill needs. Declare dependencies in frontmatter with `dependencies: [...]`. A dependency may target a standalone skill or a namespace root.
+
+**Dependent** — an active skill that needs another active skill.
+
+`skills on` auto-activates the missing dependency closure by default. Pass `--fail-on-missing-dependencies` to refuse instead and print the exact rerun command.
+
+`skills off` defaults to cascading through dependents. That cascade can cross scopes when the remaining graph would otherwise be invalid. Pass `--fail-on-dependents` to refuse instead, and pass `--cascade-dependencies` to also remove dependency closures.
+
+`skills list` reports two numbers per active skill: its own approximate cost and the deduped transitive dependency-closure cost. It also renders the active dependency graph as ASCII.
+
+Every mutation records a snapshot for `undo`/`redo`. `doctor` runs 18 diagnostic aspects with auto-fix by default, including dependency declaration validation, dependency cycle detection, and active graph drift repair.
+
+If you want the full public mental model for what shan reads, writes, validates, and restores, start with the [Shan state machine](content/docs/concepts/state-machine.mdx).
 
 ## Agent mirrors
 
@@ -179,6 +195,8 @@ The importer shells out to `skills.sh`, installs into the canonical Claude outfi
 
 ## Development
 
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for contributor onboarding, architecture boundaries, extension points, and the expected validation workflow.
+
 ```sh
 just install          # bun install
 just hooks-install    # one-time local git hook setup
@@ -202,6 +220,7 @@ Run the docs site locally with `bun run docs:dev`, then open `http://localhost:3
 
 - [Getting started](content/docs/getting-started.mdx)
 - [Conceptual overview](content/docs/concepts/overview.mdx)
+- [Shan state machine](content/docs/concepts/state-machine.mdx)
 - [CLI reference](content/docs/reference/cli.mdx)
 - [Manage skill outfits](content/docs/guides/manage-skill-outfits.mdx)
 - [Inspect transcripts](content/docs/guides/inspect-transcripts.mdx)

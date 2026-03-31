@@ -262,7 +262,7 @@ shan task open --all
 
 ### `skills` / `s` / `skills list`
 
-Show the effective outfit across all layers: core skills, pluggable-on, pluggable-off, budget, and any configured mirror agents.
+Show the effective outfit across all layers: core skills, pluggable-on, pluggable-off, budget, the active dependency graph, and any configured mirror agents.
 
 ```sh
 shan skills
@@ -284,38 +284,53 @@ Agent resolution is configured in `~/.config/shan/config.json`:
 `skills list` reports these sections when present:
 
 - `Core (user)` / `Core (project)` — real directories shan does not manage
-- `On (user)` / `On (project)` — pluggable skills currently equipped from the library
+- `On (user)` / `On (project)` — pluggable skills currently equipped from the library, with `own=<n>` and `deps=<n>` cost columns
 - `Off` — available pluggable skills not currently equipped
 - `Budget` — approximate character usage against the model-visible skills budget
+- `Dependency graph` — ASCII rendering of the active dependency graph with shared-node markers
 - `Agent mirrors` — configured mirror directories such as Codex
 
 Use an explicit array such as `["claude", "codex"]` to pin the enabled set instead of relying on `"auto"`.
 
-### `skills on <targets> [--scope user] [--strict]`
+### `skills on <targets> [--scope user] [--strict] [--fail-on-missing-dependencies]`
 
 Create outfit symlinks for the specified skills or groups. Targets are comma-separated colon-syntax names.
 
 A group name includes all descendant leaf skills. Already-on skills are reported as skips; pass `--strict` to treat them as errors.
+
+By default, `skills on` activates the full missing dependency closure before mutating anything. Pass `--fail-on-missing-dependencies` to refuse instead; shan prints the exact dependency closure that would be activated and the exact rerun command with explicit targets.
 
 ```sh
 shan skills on playwright
 shan skills on ts:tooling,linear,playwright
 shan skills on ts
 shan skills on --scope user gel
+shan skills on dispatch --fail-on-missing-dependencies
 ```
 
-### `skills off [targets] [--scope user] [--strict]`
+### `skills off [targets] [--scope user] [--strict] [--cascade-dependencies] [--fail-on-dependents]`
 
-Remove outfit symlinks. No targets means reset — turn off every pluggable skill in the scope.
+Remove outfit symlinks. No targets means reset — turn off every pluggable skill in the scope while still preserving a valid dependency graph.
+
+Two graph flags control the extra closure:
+
+- default: cascade through active dependents
+- `--fail-on-dependents`: refuse instead of cascading through dependents
+- default: leave dependencies alone
+- `--cascade-dependencies`: also remove the dependency closure of the selected skills
+
+These directions are independent. Shan validates the final remaining graph before mutating.
 
 ```sh
 shan skills off playwright
 shan skills off ts
+shan skills off cmux --fail-on-dependents
+shan skills off dispatch --cascade-dependencies
 shan skills off                                # reset all pluggable
 shan skills off --scope user
 ```
 
-### `skills move <axis> <direction> <targets> [--scope user] [--strict]`
+### `skills move <axis> <direction> <targets> [--scope user] [--strict] [--cascade-dependencies]`
 
 Migrate skills between scopes or commitments. Atomic batch — all targets validate before any move executes.
 
@@ -330,9 +345,12 @@ Migrate skills between scopes or commitments. Atomic batch — all targets valid
 
 Scope and commitment cannot change in one invocation.
 
+Moves are dependency-aware. If the requested move would break the graph, shan aborts before mutating anything. Pass `--cascade-dependencies` to expand the move set downward through the dependency closure. Dependents are never auto-moved.
+
 ```sh
 shan skills move scope up playwright
 shan skills move scope down ts:tooling
+shan skills move scope up dispatch --cascade-dependencies
 shan skills move commitment up playwright
 shan skills move commitment down playwright
 shan skills move scope down tips,linear
@@ -369,9 +387,9 @@ shan skills redo --scope user
 
 ### `doctor skills [--no-fix]`
 
-Run 14 diagnostic aspects against the outfit via the root doctor command. Default: detect and auto-fix. Use `--no-fix` for report-only mode.
+Run 18 diagnostic aspects against the outfit via the root doctor command. Default: detect and auto-fix. Use `--no-fix` for report-only mode.
 
-**Aspects**: agent-mirror, broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
+**Aspects**: agent-mirror, broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, corrupt-library-entry, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install, dependency-declaration, dependency-cycle, dependency-active-graph.
 
 The `agent-mirror` aspect is intentionally defensive around janky layouts. When Codex is enabled, doctor will:
 

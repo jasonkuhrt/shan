@@ -18,7 +18,9 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import * as path from 'node:path'
+import { skillsOn } from '../bin/skills/on.js'
 import { getRuntimeConfig } from './runtime-config.js'
+import * as SkillGraph from './skill-graph.js'
 import * as Lib from './skill-library.js'
 import * as SkillName from './skill-name.js'
 
@@ -73,6 +75,60 @@ const yamlQuote = (value: string): string =>
   /[:#{}&*!|>'"%@`,?]|\[|\]/.test(value)
     ? `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
     : value
+
+const activeSkillId = (scope: Lib.Scope, colonName: string): string =>
+  SkillGraph.skillId(scope, colonName)
+
+const resolveDeclaredDependency = (dependency: string, ownerScope: Lib.Scope) =>
+  SkillGraph.resolveDependencyTarget(dependency, ownerScope, [])
+
+const detectDeclaredDependencyCycles = (skills: readonly Lib.SkillInfo[]) =>
+  Effect.gen(function* () {
+    const adjacency = new Map<string, string[]>()
+
+    for (const skill of skills) {
+      const skillKey = activeSkillId(skill.libraryScope, skill.colonName)
+      const edges = new Set<string>()
+      for (const dependency of skill.frontmatter?.dependencies ?? []) {
+        const resolved = yield* resolveDeclaredDependency(dependency, skill.libraryScope)
+        if (resolved.issue) continue
+        for (const leaf of resolved.resolution.leaves) {
+          if (leaf.sourceKind !== 'library') continue
+          edges.add(leaf.id)
+        }
+      }
+      adjacency.set(skillKey, [...edges].sort())
+    }
+
+    const cycles = new Set<string>()
+    const visiting = new Set<string>()
+    const visited = new Set<string>()
+
+    const visit = (skillIdValue: string, trail: string[]) => {
+      if (visited.has(skillIdValue)) return
+      if (visiting.has(skillIdValue)) {
+        const cycleStart = trail.indexOf(skillIdValue)
+        const cyclePath =
+          cycleStart === -1 ? [...trail, skillIdValue] : [...trail.slice(cycleStart), skillIdValue]
+        cycles.add(cyclePath.join(' -> '))
+        return
+      }
+
+      visiting.add(skillIdValue)
+      const nextTrail = [...trail, skillIdValue]
+      for (const dependencyId of adjacency.get(skillIdValue) ?? []) {
+        visit(dependencyId, nextTrail)
+      }
+      visiting.delete(skillIdValue)
+      visited.add(skillIdValue)
+    }
+
+    for (const skillIdValue of adjacency.keys()) {
+      visit(skillIdValue, [])
+    }
+
+    return [...cycles]
+  })
 
 const checkSymlinkTarget = (target: string) =>
   Effect.tryPromise(async () => {
@@ -1044,6 +1100,112 @@ const staleRouter: DoctorAspect = {
     }),
 }
 
+const dependencyDeclaration: DoctorAspect = {
+  name: 'dependency-declaration',
+  description: 'Skill dependency declarations are valid and resolvable',
+  level: 'error',
+  detect: (ctx) =>
+    Effect.gen(function* () {
+      const findings: DoctorFinding[] = []
+
+      for (const skill of ctx.library) {
+        for (const issue of skill.frontmatterIssues ?? []) {
+          if (!issue.includes('dependencies')) continue
+          findings.push(
+            finding('dependency-declaration', 'error', `${skill.colonName} — ${issue}`, false),
+          )
+        }
+
+        for (const dependency of skill.frontmatter?.dependencies ?? []) {
+          if (!SkillName.parseFrontmatterName(dependency)) {
+            findings.push(
+              finding(
+                'dependency-declaration',
+                'error',
+                `${skill.colonName} — dependency "${dependency}" is not a valid skill name`,
+                false,
+              ),
+            )
+            continue
+          }
+
+          const resolved = yield* resolveDeclaredDependency(dependency, skill.libraryScope)
+          if (resolved.issue) {
+            findings.push(
+              finding(
+                'dependency-declaration',
+                'error',
+                `${skill.colonName} — ${resolved.issue.message}`,
+                false,
+              ),
+            )
+            continue
+          }
+
+          const ownId = activeSkillId(skill.libraryScope, skill.colonName)
+          if (resolved.resolution.leaves.some((leaf) => leaf.id === ownId)) {
+            findings.push(
+              finding(
+                'dependency-declaration',
+                'error',
+                `${skill.colonName} — dependency "${dependency}" resolves back to itself`,
+                false,
+              ),
+            )
+          }
+        }
+      }
+
+      return findings
+    }),
+}
+
+const dependencyCycle: DoctorAspect = {
+  name: 'dependency-cycle',
+  description: 'Skill dependency declarations are acyclic',
+  level: 'error',
+  detect: (ctx) =>
+    Effect.gen(function* () {
+      const cycles = yield* detectDeclaredDependencyCycles(ctx.library)
+      return cycles.map((cycle) =>
+        finding('dependency-cycle', 'error', `dependency cycle detected: ${cycle}`, false),
+      )
+    }),
+}
+
+const dependencyActiveGraph: DoctorAspect = {
+  name: 'dependency-active-graph',
+  description: 'Active outfit satisfies declared dependency closures',
+  level: 'error',
+  detect: (_ctx) =>
+    Effect.gen(function* () {
+      const graph = yield* SkillGraph.loadActiveSkillGraph()
+      return graph.issues.map((issue) =>
+        finding(
+          'dependency-active-graph',
+          'error',
+          `${SkillGraph.formatSkillRef(issue.skill.scope, issue.skill.colonName)} — ${issue.message}`,
+          issue.code === 'active-graph-drift',
+          issue.code === 'active-graph-drift'
+            ? () =>
+                skillsOn(issue.skill.colonName, {
+                  failOnMissingDependencies: false,
+                  scope: issue.skill.scope,
+                  strict: false,
+                }).pipe(
+                  Effect.as(
+                    `activated missing dependency closure for ${SkillGraph.formatSkillRef(
+                      issue.skill.scope,
+                      issue.skill.colonName,
+                    )}`,
+                  ),
+                )
+            : undefined,
+        ),
+      )
+    }),
+}
+
 // ── Registry ─────────────────────────────────────────────────────────
 
 export const ALL_ASPECTS: readonly DoctorAspect[] = [
@@ -1062,6 +1224,9 @@ export const ALL_ASPECTS: readonly DoctorAspect[] = [
   staleShadow,
   crossScopeInstall,
   staleRouter,
+  dependencyDeclaration,
+  dependencyCycle,
+  dependencyActiveGraph,
 ]
 
 // ── Exports for readlink ─────────────────────────────────────────────

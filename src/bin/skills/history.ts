@@ -30,6 +30,7 @@ export const skillsHistory = (scope: Lib.Scope) =>
         OnOp: 'on',
         OffOp: 'off',
         MoveOp: 'move',
+        GraphOp: entry._tag === 'GraphOp' ? entry.kind : 'graph',
         CopyToOutfitOp: 'cp-out',
         MoveToLibraryOp: 'mv-lib',
         MoveDirOp: 'mv-dir',

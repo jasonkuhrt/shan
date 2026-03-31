@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mapfile -t hook_paths < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '^\.git-hooks/.+\.sh$' || true)
+declare -a hook_paths=()
+
+while IFS= read -r hook_path; do
+  [[ -n "$hook_path" ]] || continue
+  hook_paths+=("$hook_path")
+done < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '^\.git-hooks/.+\.sh$' || true)
 
 if [[ "${#hook_paths[@]}" -eq 0 ]]; then
   exit 0

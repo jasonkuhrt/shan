@@ -360,7 +360,8 @@ describe('on scope inference', () => {
 
       const result = await env.run(['skills', 'on', 'shared', '--scope', 'project'])
       expect(result.exitCode).not.toBe(0)
-      expect(result.stdout).toContain('not found in library')
+      expect(result.stdout).toContain('blocked:')
+      expect(result.stdout).toContain('shared [project] -> not found')
 
       const projectLink = await lstat(path.join(env.projectOutfit, 'shared')).catch(() => null)
       expect(projectLink).toBeNull()
@@ -392,6 +393,27 @@ describe('off cross-scope guard', () => {
       // The user-scope symlink should be gone
       const linkAfter = await lstat(path.join(env.userOutfit, 'gel')).catch(() => null)
       expect(linkAfter).toBeNull()
+    } finally {
+      await env.cleanup()
+    }
+  })
+
+  test('off prefers the active user outfit over a shadowed project library entry', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('shared-off')
+      await env.addProjectLibrarySkill('shared-off')
+
+      const onResult = await env.run(['skills', 'on', 'shared-off', '--scope', 'user'])
+      expect(onResult.exitCode).toBe(0)
+
+      const offResult = await env.run(['skills', 'off', 'shared-off'])
+      expect(offResult.exitCode).toBe(0)
+
+      const userLink = await lstat(path.join(env.userOutfit, 'shared-off')).catch(() => null)
+      const projectLink = await lstat(path.join(env.projectOutfit, 'shared-off')).catch(() => null)
+      expect(userLink).toBeNull()
+      expect(projectLink).toBeNull()
     } finally {
       await env.cleanup()
     }
@@ -516,6 +538,33 @@ describe('skills move scope down', () => {
       const result = await env.run(['skills', 'move', 'scope', 'down', 'projonly'])
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain('already at project scope')
+    } finally {
+      await env.cleanup()
+    }
+  })
+})
+
+describe('skills move commitment up', () => {
+  test('promotes the active user skill when the same name exists in both libraries', async () => {
+    const env = await setupTestEnv()
+    try {
+      await env.addUserLibrarySkill('shared-promote')
+      await env.addProjectLibrarySkill('shared-promote')
+
+      const onResult = await env.run(['skills', 'on', 'shared-promote', '--scope', 'user'])
+      expect(onResult.exitCode).toBe(0)
+
+      const moveResult = await env.run(['skills', 'move', 'commitment', 'up', 'shared-promote'])
+      expect(moveResult.exitCode).toBe(0)
+
+      const userEntry = await lstat(path.join(env.userOutfit, 'shared-promote'))
+      const projectEntry = await lstat(path.join(env.projectOutfit, 'shared-promote')).catch(
+        () => null,
+      )
+      expect(userEntry.isDirectory()).toBe(true)
+      expect(userEntry.isSymbolicLink()).toBe(false)
+      expect(projectEntry).toBeNull()
+      expect(moveResult.stderr).not.toContain('ENOENT')
     } finally {
       await env.cleanup()
     }
@@ -709,7 +758,7 @@ describe('skills list', () => {
       })
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain('Budget:')
-      expect(result.stdout).toContain('16,000')
+      expect(result.stdout).toContain('45,000')
       expect(result.stdout).toContain('SLASH_COMMAND_TOOL_CHAR_BUDGET')
     } finally {
       await env.cleanup()
@@ -919,9 +968,9 @@ describe('duplicate target handling', () => {
       const result = await env.run(['skills', 'on', 'dupskill,dupskill', '--scope', 'user'])
       expect(result.exitCode).toBe(0)
 
-      // Should only see one success row, not two
-      const successMatches = result.stdout.match(/✓/g) ?? []
-      expect(successMatches.length).toBe(1)
+      const selectedMatches =
+        result.stdout.match(/\\- dupskill \[user\] -> dupskill \[user\]/g) ?? []
+      expect(selectedMatches.length).toBe(1)
 
       // And the symlink should exist
       const link = await lstat(path.join(env.userOutfit, 'dupskill'))
@@ -1509,25 +1558,33 @@ describe('invalid underscore canonical skill names', () => {
       const state = JSON.parse(await readFile(statePath, 'utf-8')) as {
         history?: Record<
           string,
-          { entries: Array<{ _tag: string; targets?: string[] }>; undoneCount: number }
+          {
+            entries: Array<{
+              _tag: string
+              snapshots?: Array<{ afterSnapshot: string[] }>
+              targets?: string[]
+            }>
+            undoneCount: number
+          }
         >
       }
       const history = state.history?.['global']
       expect(history).toBeTruthy()
       if (!history) throw new Error('expected global history')
       const lastEntry = history.entries.at(-1)
-      expect(lastEntry?._tag).toBe('OnOp')
-      if (!lastEntry?.targets) throw new Error('expected OnOp targets')
-      lastEntry.targets = ['my_tool']
+      expect(lastEntry?._tag).toBe('GraphOp')
+      const snapshot = lastEntry?.snapshots?.[0]
+      if (!snapshot) throw new Error('expected GraphOp snapshot')
+      snapshot.afterSnapshot = ['my__tool']
       await writeFile(statePath, JSON.stringify(state))
 
       const redoResult = await env.run(['skills', 'redo', '--scope', 'user'])
       expect(redoResult.exitCode).toBe(0)
       expect(redoResult.stdout + redoResult.stderr).toContain(
-        'warn: skipping invalid history target: my_tool',
+        'warn: skipping my__tool — not found in user library',
       )
 
-      const restored = await lstat(path.join(env.userOutfit, 'my_tool')).catch(() => null)
+      const restored = await lstat(path.join(env.userOutfit, 'my__tool')).catch(() => null)
       expect(restored).toBeNull()
     } finally {
       await env.cleanup()

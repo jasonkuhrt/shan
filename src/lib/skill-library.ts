@@ -47,6 +47,12 @@ import {
   getRuntimeConfig,
   onRuntimeConfigChange,
 } from './runtime-config.js'
+import {
+  readFrontmatterDocument,
+  type SkillFrontmatterDocument,
+  SkillFrontmatter as SkillFrontmatterSchema,
+  type SkillFrontmatter as SkillFrontmatterShape,
+} from './skill-frontmatter.js'
 import * as SkillName from './skill-name.js'
 
 // ── Paths ──────────────────────────────────────────────────────────
@@ -150,14 +156,7 @@ export type Level = typeof Level.Type
 
 // ── Frontmatter (serialization boundary) ──────────────────────────
 
-export const SkillFrontmatter = Schema.Struct({
-  name: Schema.String,
-  description: Schema.String,
-  whenToUse: Schema.optional(Schema.String),
-  disableModelInvocation: Schema.optional(Schema.Boolean),
-  argumentHint: Schema.optional(Schema.String),
-})
-export type SkillFrontmatter = typeof SkillFrontmatter.Type
+export type SkillFrontmatter = SkillFrontmatterShape
 
 // ── Domain Entities ───────────────────────────────────────────────
 
@@ -175,7 +174,7 @@ export class LibraryNode extends Schema.TaggedClass<LibraryNode>()('LibraryNode'
   colonName: Schema.String,
   libraryRelPath: Schema.String,
   nodeType: NodeType,
-  frontmatter: Schema.optional(SkillFrontmatter),
+  frontmatter: Schema.optional(SkillFrontmatterSchema),
 }) {
   static is = Schema.is(LibraryNode)
 }
@@ -187,7 +186,8 @@ export interface SkillInfo {
   readonly libraryRelPath: string
   readonly libraryDir: string // absolute path to the library root this skill was found in
   readonly libraryScope: Scope // which library: "user" or "project"
-  readonly frontmatter: SkillFrontmatter | null
+  readonly frontmatter: SkillFrontmatterShape | null
+  readonly frontmatterIssues?: readonly string[]
 }
 
 export interface ResolvedTarget {
@@ -198,6 +198,8 @@ export interface ResolvedTarget {
   readonly nodeType: NodeType
   readonly leaves: SkillInfo[]
 }
+
+export interface ReadFrontmatterResult extends SkillFrontmatterDocument {}
 
 export interface OnOffResult {
   readonly on: string[]
@@ -373,6 +375,22 @@ interface MoveOpFields {
   readonly subActions: ReadonlyArray<HistoryEntry>
 }
 
+interface GraphScopeSnapshot {
+  readonly afterGeneratedRouters: ReadonlyArray<string>
+  readonly afterSnapshot: ReadonlyArray<string>
+  readonly beforeGeneratedRouters: ReadonlyArray<string>
+  readonly beforeSnapshot: ReadonlyArray<string>
+  readonly scope: string
+}
+
+interface GraphOpFields {
+  readonly targets: ReadonlyArray<string>
+  readonly scope: string
+  readonly timestamp: string
+  readonly kind: 'on' | 'off'
+  readonly snapshots: ReadonlyArray<GraphScopeSnapshot>
+}
+
 interface DoctorOpFields {
   readonly targets: ReadonlyArray<string>
   readonly scope: string
@@ -383,6 +401,7 @@ export type HistoryEntry = Data.TaggedEnum<{
   readonly OnOp: HistoryEntryFields
   readonly OffOp: HistoryEntryFields
   readonly MoveOp: MoveOpFields
+  readonly GraphOp: GraphOpFields
   readonly CopyToOutfitOp: FsOpFields
   readonly MoveToLibraryOp: FsOpFields
   readonly MoveDirOp: FsOpFields
@@ -394,6 +413,7 @@ export const {
   OnOp,
   OffOp,
   MoveOp,
+  GraphOp,
   CopyToOutfitOp,
   MoveToLibraryOp,
   MoveDirOp,
@@ -781,6 +801,22 @@ const deserializeHistoryEntry = (raw: Record<string, unknown>): HistoryEntry | n
       subActions: subRaw
         .map((s) => deserializeHistoryEntry(s))
         .filter((e): e is HistoryEntry => e !== null),
+    })
+  }
+
+  if (tag === 'GraphOp') {
+    const snapshots = getObjectArray(raw, 'snapshots').map((snapshot) => ({
+      afterGeneratedRouters: getStringArray(snapshot, 'afterGeneratedRouters'),
+      afterSnapshot: getStringArray(snapshot, 'afterSnapshot'),
+      beforeGeneratedRouters: getStringArray(snapshot, 'beforeGeneratedRouters'),
+      beforeSnapshot: getStringArray(snapshot, 'beforeSnapshot'),
+      scope: getString(snapshot, 'scope') ?? '',
+    }))
+    const kindVal = getString(raw, 'kind')
+    return GraphOp({
+      ...base,
+      kind: kindVal === 'off' ? 'off' : 'on',
+      snapshots,
     })
   }
 
@@ -1232,7 +1268,7 @@ export const observedFlatNameFromLibraryRelPath = (relPath: string): string => {
 }
 
 export const canonicalFrontmatterName = (
-  frontmatter: SkillFrontmatter | null | undefined,
+  frontmatter: SkillFrontmatterShape | null | undefined,
 ): string | null => {
   if (!frontmatter) return null
   const parsed = SkillName.parseFrontmatterName(frontmatter.name)
@@ -1248,48 +1284,21 @@ export const isAdmissibleLibrarySkill = (
 
 // ── Frontmatter parsing ────────────────────────────────────────────
 
-/** Extract YAML frontmatter from a SKILL.md file. */
+/** Extract typed YAML frontmatter from a SKILL.md file. */
+export const readFrontmatterResult = (skillDir: string) => readFrontmatterDocument(skillDir)
+
+/** Read the validated frontmatter payload for a skill, if present. */
 export const readFrontmatter = (skillDir: string) =>
-  Effect.gen(function* () {
-    const skillMd = path.join(skillDir, 'SKILL.md')
-    const content = yield* Effect.tryPromise(() => readFile(skillMd, 'utf-8')).pipe(
-      Effect.catchAll(() => Effect.succeed(null)),
-    )
-    if (!content) return null
-
-    const match = content.match(/^---\n([\s\S]*?)\n---/)
-    if (!match?.[1]) return null
-
-    const yaml = match[1]
-    const fm: Record<string, string | boolean> = {}
-    for (const line of yaml.split('\n')) {
-      const sepIdx = line.indexOf(':')
-      if (sepIdx === -1) continue
-      const key = line.slice(0, sepIdx).trim()
-      const raw = line.slice(sepIdx + 1).trim()
-      // Handle multi-line (>-) by taking just the first line value
-      if (raw === '>-' || raw === '>') continue
-      if (raw === 'true') fm[key] = true
-      else if (raw === 'false') fm[key] = false
-      // Strip surrounding quotes
-      else fm[key] = raw.replace(/^["']|["']$/g, '')
-    }
-
-    return {
-      name: String(fm['name'] ?? ''),
-      description: String(fm['description'] ?? ''),
-      disableModelInvocation: fm['disable-model-invocation'] === true,
-      ...(fm['when-to-use'] ? { whenToUse: String(fm['when-to-use']) } : {}),
-      ...(fm['argument-hint'] ? { argumentHint: String(fm['argument-hint']) } : {}),
-    } satisfies SkillFrontmatter
-  })
+  Effect.map(readFrontmatterResult(skillDir), (result) => result.frontmatter)
 
 // ── Budget ─────────────────────────────────────────────────────────
 
 /** Estimate character cost of a skill's metadata (name + description + whenToUse). */
-export const estimateCharCost = (fm: SkillFrontmatter): number => {
+export const estimateCharCost = (fm: SkillFrontmatterShape): number => {
   const parts = [fm.name, fm.description]
   if (fm.whenToUse) parts.push(fm.whenToUse)
+  if (fm.argumentHint) parts.push(fm.argumentHint)
+  if (fm.dependencies) parts.push(...fm.dependencies)
   return parts.join(' ').length
 }
 
@@ -1376,13 +1385,14 @@ export const resolveTarget = (colonName: string, scope: Scope = 'project', stric
 
       // For leaf skills, the leaves array is just the skill itself
       if (nodeType === 'leaf') {
-        const fm = yield* readFrontmatter(libraryPath)
+        const fm = yield* readFrontmatterResult(libraryPath)
         const resolvedLeaf: SkillInfo = {
           colonName,
           libraryRelPath: relPath,
           libraryDir: libDir,
           libraryScope: libScope,
-          frontmatter: fm,
+          frontmatter: fm.frontmatter,
+          frontmatterIssues: fm.issues,
         }
         const leaf = {
           colonName,
@@ -1400,13 +1410,14 @@ export const resolveTarget = (colonName: string, scope: Scope = 'project', stric
 
       // For callable groups, include the group's own SKILL.md as a leaf
       if (nodeType === 'callable-group') {
-        const fm = yield* readFrontmatter(libraryPath)
+        const fm = yield* readFrontmatterResult(libraryPath)
         const ownLeaf: SkillInfo = {
           colonName,
           libraryRelPath: relPath,
           libraryDir: libDir,
           libraryScope: libScope,
-          frontmatter: fm,
+          frontmatter: fm.frontmatter,
+          frontmatterIssues: fm.issues,
         }
         if (!isAdmissibleLibrarySkill(ownLeaf)) return null
 
@@ -1465,13 +1476,14 @@ export const resolveLeaves = (
       }).pipe(Effect.catchAll(() => Effect.succeed(false)))
 
       if (hasSkillMd) {
-        const fm = yield* readFrontmatter(entryPath)
+        const fm = yield* readFrontmatterResult(entryPath)
         results.push({
           colonName: childColonName,
           libraryRelPath: childRelPath,
           libraryDir: libDir,
           libraryScope: libScope,
-          frontmatter: fm,
+          frontmatter: fm.frontmatter,
+          frontmatterIssues: fm.issues,
         })
       }
 

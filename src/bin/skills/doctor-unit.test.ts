@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
@@ -34,6 +34,30 @@ const setupProjectLibrary = async (...skills: string[]) => {
     await mkdir(skillDir, { recursive: true })
     await writeFile(path.join(skillDir, 'SKILL.md'), SKILL_MD(skill))
   }
+}
+
+const writeProjectSkill = async (
+  relPath: string,
+  options: {
+    readonly dependencies?: readonly string[]
+    readonly description?: string
+    readonly name?: string
+    readonly rawDependencies?: string
+  } = {},
+) => {
+  const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+  const skillDir = path.join(libDir, relPath)
+  const name = options.name ?? relPath.replaceAll('/', ':')
+  const dependencies =
+    options.rawDependencies ??
+    (options.dependencies
+      ? `dependencies:\n${options.dependencies.map((dependency) => `  - ${dependency}`).join('\n')}\n`
+      : '')
+  await mkdir(skillDir, { recursive: true })
+  await writeFile(
+    path.join(skillDir, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: ${options.description ?? `Test skill ${name}`}\n${dependencies}---\n\n# ${name}\n`,
+  )
 }
 
 beforeEach(async () => {
@@ -362,5 +386,54 @@ describe('skillsDoctor', () => {
 
     expect(gitignore).not.toContain('.claude/skills/missing-skill')
     expect(history.entries).toEqual([])
+  })
+
+  test('reports malformed dependency declarations', async () => {
+    await writeProjectSkill('broken-deps', { rawDependencies: 'dependencies: nope\n' })
+
+    const result = await run(collectDoctorFindings('project'))
+    expect(result).not.toBeNull()
+    if (!result) throw new Error('expected project doctor findings')
+
+    expect(
+      result.findings.some(
+        (finding) =>
+          finding.aspect === 'dependency-declaration' &&
+          finding.message.includes('invalid frontmatter field "dependencies"'),
+      ),
+    ).toBe(true)
+  })
+
+  test('reports dependency cycles in declarations', async () => {
+    await writeProjectSkill('cycle-a', { dependencies: ['cycle-b'] })
+    await writeProjectSkill('cycle-b', { dependencies: ['cycle-a'] })
+
+    const result = await run(collectDoctorFindings('project'))
+    expect(result).not.toBeNull()
+    if (!result) throw new Error('expected project doctor findings')
+
+    expect(result.findings.some((finding) => finding.aspect === 'dependency-cycle')).toBe(true)
+  })
+
+  test('auto-fix repairs active dependency drift by activating the missing closure', async () => {
+    await writeProjectSkill('doctor-dependency')
+    await writeProjectSkill('doctor-owner', { dependencies: ['doctor-dependency'] })
+
+    const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+    const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+    await mkdir(outfitDir, { recursive: true })
+    await symlink(path.join(libDir, 'doctor-owner'), path.join(outfitDir, 'doctor-owner'))
+
+    const before = await run(collectDoctorFindings('project'))
+    expect(before).not.toBeNull()
+    if (!before) throw new Error('expected project doctor findings before autofix')
+    expect(before.findings.some((finding) => finding.aspect === 'dependency-active-graph')).toBe(
+      true,
+    )
+
+    await run(skillsDoctor({ noFix: false }))
+
+    const dependencyLink = path.join(outfitDir, 'doctor-dependency')
+    expect((await lstat(dependencyLink)).isSymbolicLink()).toBe(true)
   })
 })

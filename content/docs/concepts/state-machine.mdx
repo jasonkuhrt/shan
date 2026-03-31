@@ -1,0 +1,240 @@
+---
+title: Shan state machine
+description: The full system model for what shan reads, what it mutates, and how skill graph operations move through validation, history, and repair.
+lucid_generated: true
+generated_at: '2026-03-31T00:00:00Z'
+source_files:
+  - README.md
+  - src/bin/shan.ts
+  - src/bin/transcript/print.ts
+  - src/bin/transcript/dump.ts
+  - src/bin/transcript/analyze.ts
+  - src/bin/task/dump.ts
+  - src/bin/task/open.ts
+  - src/bin/skills/list.ts
+  - src/bin/skills/on.ts
+  - src/bin/skills/off.ts
+  - src/bin/skills/move.ts
+  - src/bin/skills/undo.ts
+  - src/bin/skills/redo.ts
+  - src/bin/skills/install.ts
+  - src/bin/skills/install-user.ts
+  - src/lib/skill-library.ts
+  - src/lib/skill-graph.ts
+  - src/lib/doctor-aspects.ts
+  - src/lib/task-resolver.ts
+  - src/lib/transcript-schema.ts
+---
+
+This page is the compact mental model for shan. Read it when you want to answer four questions quickly:
+
+- what shan can see
+- what shan can mutate
+- which commands are read-only versus state-changing
+- how the skill graph stays valid across `on`, `off`, `move`, `doctor`, and `undo`
+
+## One-screen system map
+
+```text
+Claude Code artifacts on disk
+│
+├─ transcripts
+│  └─ ~/.claude/projects/<encoded-project>/<session>.jsonl
+│     └─ shan transcript print | dump | analyze
+│        ├─ print   -> terminal conversation view
+│        ├─ dump    -> Markdown transcript in project .claude/transcripts/
+│        └─ analyze -> terminal charts, token summaries, dimension tracks
+│
+├─ tasks
+│  └─ ~/.claude/tasks/<list-id>/<n>.json
+│     └─ shan task dump | open
+│        ├─ dump -> copy raw JSON or Markdown into project .claude/tasks/
+│        └─ open -> open task list or task file in $EDITOR
+│
+└─ skills
+   ├─ config
+   │  ├─ ~/.config/shan/config.json
+   │  └─ ~/.local/shan/cache.json
+   ├─ canonical Claude skill roots
+   │  ├─ ~/.claude/skills-library/     available user pluggable skills
+   │  ├─ ~/.claude/skills/             active user outfit
+   │  ├─ .claude/skills-library/       available project pluggable skills
+   │  └─ .claude/skills/               active project outfit
+   ├─ optional mirrors
+   │  ├─ ~/.codex/skills/
+   │  └─ .codex/skills/
+   ├─ state
+   │  └─ ~/.claude/shan/state.json     installs, snapshots, operation history
+   └─ shan skills | doctor
+      ├─ list        -> explain effective outfit, costs, graph, mirrors
+      ├─ on          -> activate targets + missing dependency closure
+      ├─ off         -> deactivate targets + dependent cascade by default
+      ├─ move        -> change scope or commitment without breaking graph
+      ├─ install     -> import external skills into shan's model
+      ├─ install-user-> install shan's bundled skills
+      ├─ doctor      -> audit and optionally repair graph, routers, mirrors, drift
+      └─ undo/redo   -> restore prior snapshots
+```
+
+## What changes state and what does not
+
+| Command family                    | Reads                                         | Writes                                                                                        | Why you use it                                                         |
+| --------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `transcript print`                | transcript JSONL                              | nothing                                                                                       | inspect a session quickly in the terminal                              |
+| `transcript dump`                 | transcript JSONL                              | Markdown transcript in the project                                                            | read or archive a session in an editor                                 |
+| `transcript analyze`              | transcript JSONL                              | nothing                                                                                       | understand token burn, elapsed time, files, alerts, and model behavior |
+| `task dump`                       | task JSON                                     | copied JSON or Markdown in the project                                                        | pull task lists into the repo without spending agent context           |
+| `task open`                       | task JSON                                     | nothing                                                                                       | jump straight into a task list or task file in the editor              |
+| `skills list`                     | outfit, library, config, state, mirrors       | nothing                                                                                       | understand the effective skill system right now                        |
+| `skills on`                       | library, outfit, graph, config                | outfit links, routers, mirrors, history                                                       | equip skills and auto-activate what they need                          |
+| `skills off`                      | active graph, config, history                 | outfit links, routers, mirrors, history                                                       | unequip skills while preserving graph validity                         |
+| `skills move`                     | library, outfit, graph, history               | library dirs, outfit links, routers, mirrors, history                                         | relocate skills between scope or commitment without changing meaning   |
+| `skills install` / `install-user` | remote or bundled skill sources, local outfit | library entries, outfit links, routers, mirrors, and some direct bootstrap filesystem changes | bring new skills under shan management                                 |
+| `doctor skills`                   | everything above                              | optional fixes to graph, mirrors, routers, state                                              | detect or repair drift and declaration problems                        |
+| `skills undo` / `redo`            | history snapshots                             | restored outfit state, mirrors, history pointer                                               | move backward or forward through prior mutations                       |
+
+## The skill mutation loop
+
+Most skill mutations use the same high-level machine. `skills on`, `skills off`, `skills move`, `doctor` repairs, and history restore all fit this shape directly. Install flows are close, but they may do extra bootstrap filesystem work before entering the managed graph loop:
+
+```text
+requested command
+  -> resolve targets in the initial scope
+  -> expand namespace targets into concrete skills
+  -> resolve dependency and dependent relationships across scopes
+  -> compute the exact final graph implied by the flags
+  -> validate declarations, cycles, scope legality, and final graph validity
+  -> plan filesystem work (symlinks, library moves, routers, mirrors, history)
+  -> apply the mutation
+  -> reconcile mirror agents
+  -> record snapshot/history
+  -> print a full ASCII report of what was selected, cascaded, blocked, skipped, and changed
+```
+
+That shared loop is why shan feels like one system instead of a pile of unrelated commands. The vocabulary and invariants stay the same even when the mutation direction changes.
+
+## Skill graph model
+
+The skills subsystem is a dependency-aware graph manager layered on top of Claude Code's filesystem conventions.
+
+### Nodes
+
+- **core skills** are real outfit directories that stay active and participate in validation
+- **pluggable skills** are symlinks from the outfit into the library
+- **namespace roots** may be selectable and may also be dependency targets
+- **shadowed names** may exist in both project and user libraries; shan resolves them deterministically by scope rules
+
+### Edges
+
+- edges come from `dependencies: [...]` in `SKILL.md` frontmatter
+- a dependency may point at a standalone skill or a namespace root
+- namespace dependencies are dynamic at command time: the target means all current descendants of that namespace root
+- reaching inside a namespace is illegal when the namespace root itself is the dependency target
+- user-scope skills cannot depend on project-only skills
+- self-dependencies and cycles are illegal
+
+### Invariants
+
+- the active graph must stay gap-free after every command
+- core and pluggable nodes both count when validating the active graph
+- shan does not remember why a skill became active; it acts on the current graph, not provenance
+- cross-scope mutation is allowed only when the validated graph requires it
+
+## How each skill command bends the graph
+
+### `skills on`
+
+- resolves the target set
+- expands any namespace targets
+- computes the full missing dependency closure
+- activates that closure by default
+- aborts instead if you pass `--fail-on-missing-dependencies`
+
+Use it when you know what capability you want and want shan to make the graph legal for you.
+
+### `skills off`
+
+- starts from the selected skills, or every pluggable skill in scope during reset
+- cascades upward through active dependents by default
+- leaves dependencies alone by default
+- optionally removes dependencies too when you pass `--cascade-dependencies`
+- refuses dependent cascade instead when you pass `--fail-on-dependents`
+
+Use it when you want to remove capability while keeping the remaining graph valid.
+
+### `skills move`
+
+- preserves meaning while changing location
+- fails by default if the move would strand dependencies or violate scope rules
+- expands downward through dependencies only when you pass `--cascade-dependencies`
+- never auto-moves dependents
+
+Use it when you want the same graph semantics in a different scope or commitment shape.
+
+### `doctor skills`
+
+- audits declaration legality, reach-in mistakes, cycles, missing dependencies, mirror issues, state drift, router drift, and more
+- auto-fixes only what is mechanically repairable, such as activating a missing legal dependency closure or reconciling mirror drift
+- leaves invalid declarations as findings for a human to fix
+
+Use it when the filesystem may have drifted or when namespace/dependency evolution has made yesterday's outfit invalid today.
+
+### `skills undo` / `skills redo`
+
+- restore prior snapshots of the managed state
+- replay or reverse whole operations, not partial substeps
+- do not reconstruct provenance; they restore filesystem state
+
+Use them when the previous mutation was coherent but not the one you want anymore.
+
+## Packed command-to-state reference
+
+```text
+Read-only path
+  transcript print/dump/analyze -> interpret existing transcript files
+  task dump/open                -> interpret existing task files
+  skills list                   -> interpret current outfit/library/state/config
+
+Mutation path
+  skills on
+    -> expand targets
+    -> add missing dependency closure
+    -> reconcile routers/mirrors
+    -> snapshot + report
+
+  skills off
+    -> remove targets
+    -> cascade through dependents by default
+    -> optionally cascade through dependencies
+    -> reconcile routers/mirrors
+    -> snapshot + report
+
+  skills move
+    -> validate destination legality
+    -> optionally expand through dependencies
+    -> move library/outfit representation
+    -> reconcile routers/mirrors
+    -> snapshot + report
+
+  doctor skills
+    -> scan declarations + live filesystem + graph state
+    -> optionally apply safe repairs
+    -> print findings/fixes
+
+  undo / redo
+    -> restore prior snapshot
+    -> reconcile mirrors
+    -> move history pointer
+```
+
+## Why this page exists
+
+Shan is easy to underestimate if you only read the command reference. The public value is not just "some CLI commands"; it is a typed, graph-aware control surface over Claude Code artifacts:
+
+- transcripts become readable and analyzable
+- tasks become editor-friendly and project-local
+- skills become a managed dependency graph with history, repair, and cross-agent mirroring
+
+If you are deciding whether shan is useful for you, the shortest honest answer is this:
+
+Shan is most valuable when you want Claude Code artifacts to behave like a real system instead of a loose pile of files.

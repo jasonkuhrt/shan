@@ -53,6 +53,15 @@ const undoEntry = (entry: Lib.HistoryEntry, scope: Lib.Scope): Effect.Effect<voi
   if (entry._tag === 'OnOp' || entry._tag === 'OffOp') {
     return Lib.restoreSnapshot(entry.snapshot, entry.generatedRouters, scope)
   }
+  if (entry._tag === 'GraphOp') {
+    return Effect.forEach([...entry.snapshots].reverse(), (snapshot) =>
+      Lib.restoreSnapshot(
+        snapshot.beforeSnapshot,
+        snapshot.beforeGeneratedRouters,
+        Lib.resolveHistoryScope(snapshot.scope),
+      ),
+    ).pipe(Effect.asVoid)
+  }
   if (entry._tag === 'MoveOp') {
     return undoMoveOp(entry)
   }

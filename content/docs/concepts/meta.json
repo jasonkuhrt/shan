@@ -1,4 +1,4 @@
 {
   "title": "Concepts",
-  "pages": ["overview", "glossary"]
+  "pages": ["overview", "state-machine", "glossary"]
 }

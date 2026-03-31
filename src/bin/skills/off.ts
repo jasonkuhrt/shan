@@ -1,276 +1,404 @@
 /**
  * shan skills off [targets] [--scope user] [--strict]
  *
- * Turn off one or more skills or groups. Removes symlinks from outfit.
- * No targets = turn off ALL pluggable (reset).
- * Two-phase execution: validate all targets first, abort on any error, then execute.
+ * Turn off one or more skills or groups. Default behavior cascades through
+ * active dependents; dependency cascades are opt-in.
  */
 
-import { Console, Effect, Option } from 'effect'
+import { Console, Effect } from 'effect'
 import { lstat, rm, unlink } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from '../../lib/skill-library.js'
+import * as SkillGraph from '../../lib/skill-graph.js'
 import { getRuntimeConfig } from '../../lib/runtime-config.js'
 import * as SkillName from '../../lib/skill-name.js'
 
 export interface SkillsOffOptions {
+  readonly cascadeDependencies?: boolean
+  readonly failOnDependents?: boolean
   readonly scope: Lib.Scope
   readonly strict: boolean
 }
 
-/** Validated uninstall action ready for Phase 2. */
-interface ValidatedUninstall {
-  readonly flatName: string
-  readonly colonName: string
-  readonly linkPath: string
-  readonly scope: Lib.Scope
+interface ReportSection {
+  readonly lines: readonly string[]
+  readonly title: string
 }
+
+const sectionTree = (title: string, lines: readonly string[]): ReportSection => ({
+  lines,
+  title,
+})
+
+const printReport = (sections: readonly ReportSection[]) =>
+  Effect.gen(function* () {
+    for (const [index, section] of sections.entries()) {
+      if (section.lines.length === 0) continue
+      yield* Console.log(`${section.title}:`)
+      for (const [lineIndex, line] of section.lines.entries()) {
+        yield* Console.log(`  ${lineIndex === section.lines.length - 1 ? '\\-' : '|-'} ${line}`)
+      }
+      if (index < sections.length - 1) yield* Console.log('')
+    }
+  })
+
+const cleanupUnusedRouters = (
+  scope: Lib.Scope,
+  remainingSkills: readonly SkillGraph.ActiveSkill[],
+  removedRouterNames: string[],
+) =>
+  Effect.gen(function* () {
+    const dir = Lib.outfitDir(scope)
+    const activeNamespacedTopLevels = new Set(
+      remainingSkills
+        .filter((skill) => skill.scope === scope)
+        .flatMap((skill) => {
+          const parsed = SkillName.parseFrontmatterName(skill.colonName)
+          return parsed && SkillName.isNamespaced(parsed) ? [SkillName.topLevelName(parsed)] : []
+        }),
+    )
+
+    const removed: string[] = []
+
+    for (const routerName of removedRouterNames) {
+      if (activeNamespacedTopLevels.has(routerName)) continue
+      const routerPath = path.join(dir, routerName)
+      const exists = yield* Effect.tryPromise(async () => {
+        const stat = await lstat(routerPath)
+        return stat.isDirectory()
+      }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+      if (!exists) continue
+      yield* Effect.tryPromise(() => rm(routerPath, { recursive: true }))
+      removed.push(routerName)
+    }
+
+    return removed
+  })
+
+/** Remove a generated router directory when it matches a library namespace root. */
+export const cleanupRouter = (outfitDir: string, groupName: string, scope: Lib.Scope) =>
+  Effect.gen(function* () {
+    const routerPath = path.join(outfitDir, groupName)
+    const stat = yield* Effect.tryPromise(async () => {
+      const next = await lstat(routerPath)
+      return next
+    }).pipe(Effect.catchAll(() => Effect.succeed(null)))
+    if (!stat) return
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return
+
+    for (const libraryDir of Lib.librarySearchOrder(scope)) {
+      const libraryPath = path.join(libraryDir, groupName)
+      const exists = yield* Effect.tryPromise(async () => {
+        const next = await lstat(libraryPath)
+        return next.isDirectory()
+      }).pipe(Effect.catchAll(() => Effect.succeed(false)))
+      if (!exists) continue
+
+      const nodeType = yield* Lib.getNodeType(libraryPath)
+      if (nodeType === 'group' || nodeType === 'callable-group') {
+        yield* Effect.tryPromise(() => rm(routerPath, { recursive: true })).pipe(
+          Effect.catchAll(() => Effect.void),
+        )
+        return
+      }
+    }
+  })
+
+const collectTopLevelRouters = (skills: readonly SkillGraph.ActiveSkill[]): string[] =>
+  [
+    ...new Set(
+      skills.flatMap((skill) => {
+        const parsed = SkillName.parseFrontmatterName(skill.colonName)
+        return parsed && SkillName.isNamespaced(parsed) ? [SkillName.topLevelName(parsed)] : []
+      }),
+    ),
+  ].sort()
 
 export const skillsOff = (targetInput: string, options: SkillsOffOptions) =>
   Effect.gen(function* () {
-    const exists = yield* Lib.libraryExists(options.scope)
-    if (!exists) {
-      yield* Console.error('No skills library found.')
-      return yield* Effect.fail(new Error('Library not found'))
+    if (targetInput) {
+      const libraryExists = yield* Lib.libraryExists(options.scope)
+      if (!libraryExists) {
+        yield* Console.error('No skills library found.')
+        return yield* Effect.fail(new Error('Library not found'))
+      }
     }
 
-    // No targets = reset all pluggable (non-atomic — always succeeds)
+    const cascadeDependencies = options.cascadeDependencies ?? false
+    const failOnDependents = options.failOnDependents ?? false
+    const activeGraph = yield* SkillGraph.loadActiveSkillGraph()
+    const selectedLines: string[] = []
+    const blockedLines: string[] = []
+    const skippedLines: string[] = []
+    const cascadedLines = new Set<string>()
+    const removalSet = new Set<string>()
+    const selectionSet = new Set<string>()
+
+    const selectSkill = (
+      skill: SkillGraph.ActiveSkill,
+      reason: 'dependency' | 'dependent' | 'selected',
+    ) => {
+      if (skill.commitment === 'core') {
+        blockedLines.push(
+          `${SkillGraph.formatSkillRef(skill.scope, skill.colonName)} -> cannot turn off core skill`,
+        )
+        return
+      }
+
+      const label = SkillGraph.formatSkillRef(skill.scope, skill.colonName)
+      if (reason === 'selected') {
+        selectedLines.push(label)
+        selectionSet.add(skill.id)
+      } else {
+        cascadedLines.add(`${label} <- ${reason}`)
+      }
+      removalSet.add(skill.id)
+    }
+
     if (!targetInput) {
-      yield* resetAll(Lib.outfitDir(options.scope), options.scope)
-      return
-    }
-
-    const targets = Lib.parseTargets(targetInput)
-    // Only search the requested scope's outfit — never cross scope boundaries.
-    const searchScopes: Lib.Scope[] = [options.scope]
-
-    // ── Phase 1: Validate all targets (no side effects) ─────────────
-
-    const batch = Lib.emptyBatch<ValidatedUninstall>()
-    const groupsToClean = new Set<string>()
-
-    for (const target of targets) {
-      // strict=false: off needs fallthrough to resolve group leaves for legacy cross-scope installs.
-      // The write is scoped by searchScopes=[options.scope], so fallthrough here is read-only.
-      const resolved = yield* Lib.resolveTarget(target, options.scope, false)
-      if (!resolved) {
-        batch.errors.push({ name: target, reason: 'not found in library' })
-        continue
+      for (const skill of activeGraph.skills.filter(
+        (candidate) => candidate.scope === options.scope && candidate.commitment === 'pluggable',
+      )) {
+        selectSkill(skill, 'selected')
       }
-
-      // Track top-level group for router cleanup
-      if (resolved.nodeType === 'group' || resolved.nodeType === 'callable-group') {
-        const parsedTarget = SkillName.parseFrontmatterName(target)
-        if (!parsedTarget || !SkillName.isNamespaced(parsedTarget)) {
-          groupsToClean.add(parsedTarget ? SkillName.topLevelName(parsedTarget) : target)
+      if (selectedLines.length === 0)
+        skippedLines.push(`no pluggable skills active in ${options.scope}`)
+    } else {
+      const targets = Lib.parseTargets(targetInput)
+      for (const target of targets) {
+        const resolved = yield* Lib.resolveTarget(target, options.scope, false)
+        if (!resolved) {
+          blockedLines.push(`${SkillGraph.formatSkillRef(options.scope, target)} -> not found`)
+          continue
         }
-      }
 
-      for (const leaf of resolved.leaves) {
-        const flatName = Lib.flattenName(leaf.libraryRelPath)
-
-        // Search both scopes for the symlink
-        let found = false
-        for (const checkScope of searchScopes) {
-          const checkDir = Lib.outfitDir(checkScope)
-          const linkPath = path.join(checkDir, flatName)
-
-          const stat = yield* Effect.tryPromise(() => lstat(linkPath)).pipe(
-            Effect.catchAll(() => Effect.succeed(null)),
+        for (const leaf of resolved.leaves) {
+          const activeSkill = activeGraph.skills.find(
+            (candidate) =>
+              candidate.scope === options.scope && candidate.colonName === leaf.colonName,
           )
-          if (!stat) continue
-
-          found = true
-          if (stat.isSymbolicLink()) {
-            batch.actions.push({ flatName, colonName: leaf.colonName, linkPath, scope: checkScope })
-          } else if (stat.isDirectory()) {
-            batch.errors.push({ name: leaf.colonName, reason: 'cannot turn off core skill' })
+          if (!activeSkill) {
+            skippedLines.push(
+              `${SkillGraph.formatSkillRef(options.scope, leaf.colonName)} -> already off`,
+            )
+            continue
           }
-          break
-        }
-
-        if (!found) {
-          batch.skips.push({ name: leaf.colonName, reason: 'already off' })
+          selectSkill(activeSkill, 'selected')
         }
       }
     }
 
-    // ── Abort check ─────────────────────────────────────────────────
+    if (options.strict && skippedLines.length > 0) {
+      blockedLines.push('strict mode treats skipped targets as errors')
+    }
 
-    const toRow = (a: ValidatedUninstall): Lib.ResultRow => ({
-      status: 'ok',
-      name: a.colonName,
-      scope: a.scope,
-      commitment: 'pluggable',
-    })
+    let changed = true
+    while (changed) {
+      changed = false
 
-    if (Lib.shouldAbort(batch, options.strict)) {
-      yield* Lib.reportResults(Lib.batchToRows(batch, toRow, true))
+      for (const skill of activeGraph.skills) {
+        if (removalSet.has(skill.id)) continue
+        const dependencyIds = activeGraph.dependencyLeafIdsBySkill.get(skill.id) ?? []
+        const removedDependencies = dependencyIds.filter((dependencyId) =>
+          removalSet.has(dependencyId),
+        )
+        if (removedDependencies.length === 0) continue
+
+        const dependencyLabels = removedDependencies
+          .map((dependencyId) => activeGraph.skillsById.get(dependencyId))
+          .filter((dependency): dependency is SkillGraph.ActiveSkill => dependency !== undefined)
+          .map((dependency) => SkillGraph.formatSkillRef(dependency.scope, dependency.colonName))
+          .join(', ')
+
+        if (failOnDependents) {
+          blockedLines.push(
+            `${SkillGraph.formatSkillRef(skill.scope, skill.colonName)} depends on ${dependencyLabels}`,
+          )
+          continue
+        }
+
+        if (skill.commitment === 'core') {
+          blockedLines.push(
+            `${SkillGraph.formatSkillRef(skill.scope, skill.colonName)} depends on ${dependencyLabels} and cannot be cascaded because it is core`,
+          )
+          continue
+        }
+
+        removalSet.add(skill.id)
+        cascadedLines.add(`${SkillGraph.formatSkillRef(skill.scope, skill.colonName)} <- dependent`)
+        changed = true
+      }
+
+      if (!cascadeDependencies) continue
+
+      for (const skillIdValue of [...removalSet]) {
+        const skill = activeGraph.skillsById.get(skillIdValue)
+        if (!skill) continue
+
+        for (const dependencyId of activeGraph.dependencyLeafIdsBySkill.get(skillIdValue) ?? []) {
+          if (removalSet.has(dependencyId)) continue
+
+          const dependency = activeGraph.skillsById.get(dependencyId)
+          if (!dependency) continue
+
+          if (dependency.commitment === 'core') {
+            blockedLines.push(
+              `${SkillGraph.formatSkillRef(skill.scope, skill.colonName)} requires core dependency ${SkillGraph.formatSkillRef(
+                dependency.scope,
+                dependency.colonName,
+              )}`,
+            )
+            continue
+          }
+
+          removalSet.add(dependencyId)
+          cascadedLines.add(
+            `${SkillGraph.formatSkillRef(dependency.scope, dependency.colonName)} <- dependency`,
+          )
+          changed = true
+        }
+      }
+    }
+
+    const remainingSkills = activeGraph.skills.filter((skill) => !removalSet.has(skill.id))
+    const finalGraph = yield* SkillGraph.buildActiveSkillGraph(remainingSkills)
+    for (const issue of finalGraph.issues) {
+      blockedLines.push(
+        `${SkillGraph.formatSkillRef(issue.skill.scope, issue.skill.colonName)} -> ${issue.message}`,
+      )
+    }
+
+    if (blockedLines.length > 0) {
+      yield* printReport([
+        sectionTree('selected', [...new Set(selectedLines)].sort()),
+        sectionTree('blocked', [...new Set(blockedLines)].sort()),
+        sectionTree('skipped', [...new Set(skippedLines)].sort()),
+      ])
       return yield* Effect.fail(new Error('Some targets failed'))
     }
 
-    // ── Phase 2: Execute all mutations ──────────────────────────────
-
-    const affectedScopes = new Set(batch.actions.map((a) => a.scope))
-
-    // Snapshot before mutations (per affected scope)
-    const snapshots = new Map<Lib.Scope, string[]>()
-    const routersBeforeMap = new Map<Lib.Scope, string[]>()
-    for (const scope of affectedScopes) {
-      snapshots.set(scope, yield* Lib.snapshotOutfit(scope))
-      routersBeforeMap.set(scope, yield* Lib.detectGeneratedRouters(scope))
+    if (removalSet.size === 0) {
+      yield* printReport([
+        sectionTree('selected', [...new Set(selectedLines)].sort()),
+        sectionTree('skipped', [...new Set(skippedLines)].sort()),
+      ])
+      return
     }
 
-    // Remove symlinks
-    for (const action of batch.actions) {
-      yield* Effect.tryPromise(() => unlink(action.linkPath))
+    const removedSkills = [...removalSet]
+      .map((skillIdValue) => activeGraph.skillsById.get(skillIdValue))
+      .filter((skill): skill is SkillGraph.ActiveSkill => skill !== undefined)
+      .sort((left, right) =>
+        left.scope === right.scope
+          ? left.colonName.localeCompare(right.colonName)
+          : left.scope.localeCompare(right.scope),
+      )
+    const affectedScopes = new Set<Lib.Scope>(removedSkills.map((skill) => skill.scope))
+    const beforeSnapshots = new Map<
+      Lib.Scope,
+      { readonly generatedRouters: readonly string[]; readonly snapshot: readonly string[] }
+    >()
+
+    for (const scope of affectedScopes) {
+      beforeSnapshots.set(scope, {
+        generatedRouters: yield* Lib.detectGeneratedRouters(scope),
+        snapshot: yield* Lib.snapshotOutfit(scope),
+      })
     }
 
-    // Auto-router cleanup for top-level groups (per affected scope)
-    for (const scope of affectedScopes) {
-      const scopeDir = Lib.outfitDir(scope)
-      for (const groupName of groupsToClean) {
-        yield* cleanupRouter(scopeDir, groupName, scope)
+    const routersToCleanup = collectTopLevelRouters(removedSkills)
+
+    const removedRoutersByScope = new Map<Lib.Scope, readonly string[]>()
+
+    yield* Effect.gen(function* () {
+      const gitignoreRemovals: string[] = []
+
+      for (const skill of removedSkills) {
+        const linkPath = path.join(Lib.outfitDir(skill.scope), skill.flatName)
+        yield* Effect.tryPromise(() => unlink(linkPath))
+        if (skill.scope === 'project') {
+          gitignoreRemovals.push(`.claude/skills/${skill.flatName}`)
+        }
       }
+
+      for (const scope of affectedScopes) {
+        const removedRouters = yield* cleanupUnusedRouters(scope, remainingSkills, routersToCleanup)
+        removedRoutersByScope.set(scope, removedRouters)
+      }
+
+      if (gitignoreRemovals.length > 0) {
+        yield* Lib.manageGitignoreRemove(getRuntimeConfig().projectRoot, gitignoreRemovals)
+      }
+    }).pipe(
+      Effect.tapError(() =>
+        Effect.forEach([...affectedScopes], (scope) => {
+          const snapshot = beforeSnapshots.get(scope)
+          if (!snapshot) return Effect.void
+          return Lib.restoreSnapshot(snapshot.snapshot, snapshot.generatedRouters, scope)
+        }),
+      ),
+    )
+
+    const afterSnapshots = new Map<
+      Lib.Scope,
+      { readonly generatedRouters: readonly string[]; readonly snapshot: readonly string[] }
+    >()
+    for (const scope of affectedScopes) {
+      afterSnapshots.set(scope, {
+        generatedRouters: yield* Lib.detectGeneratedRouters(scope),
+        snapshot: yield* Lib.snapshotOutfit(scope),
+      })
     }
 
-    // Clean up gitignore entries for removed project-scope skills
-    const projectGitignoreRemovals = batch.actions
-      .filter((a) => a.scope === 'project')
-      .map((a) => `.claude/skills/${a.flatName}`)
-    if (projectGitignoreRemovals.length > 0) {
-      yield* Lib.manageGitignoreRemove(getRuntimeConfig().projectRoot, projectGitignoreRemovals)
-    }
-
-    // Update current state
     const state = yield* Lib.loadState()
     const config = yield* Lib.loadConfig()
     let updatedState = state
-    for (const action of batch.actions) {
-      updatedState = Lib.removeCurrentInstall(updatedState, action.scope, action.flatName)
-    }
-
-    // Record history per affected scope
     for (const scope of affectedScopes) {
-      const history = Lib.getProjectHistory(updatedState, scope)
-      if (history.undoneCount > 0) {
-        history.entries.splice(history.entries.length - history.undoneCount)
-        history.undoneCount = 0
-      }
-      history.entries.push(
-        Lib.OffOp({
-          targets,
-          scope,
-          timestamp: new Date().toISOString(),
-          snapshot: snapshots.get(scope) ?? [],
-          generatedRouters: routersBeforeMap.get(scope) ?? [],
-        }),
-      )
-      if (history.entries.length > config.skills.historyLimit) {
-        history.entries.splice(0, history.entries.length - config.skills.historyLimit)
-      }
-      updatedState = Lib.setProjectHistory(updatedState, scope, history)
-    }
-    yield* Lib.saveState(updatedState)
-    yield* Lib.syncAgentMirrors(options.scope, config)
-
-    // Report results
-    yield* Lib.reportResults(Lib.batchToRows(batch, toRow))
-  })
-
-/** Reset all pluggable skills at the given scope. */
-const resetAll = (dir: string, scope: Lib.Scope) =>
-  Effect.gen(function* () {
-    const state = yield* Lib.loadState()
-    const config = yield* Lib.loadConfig()
-    const snapshotBefore = yield* Lib.snapshotOutfit(scope)
-    const routersBefore = yield* Lib.detectGeneratedRouters(scope)
-
-    const outfit = yield* Lib.listOutfit(scope)
-    let removed = 0
-    let coreSkipped = 0
-    const removedNames: string[] = []
-
-    for (const entry of outfit) {
-      if (entry.commitment === 'pluggable') {
-        yield* Effect.ignore(Effect.tryPromise(() => unlink(path.join(dir, entry.name))))
-        removed++
-        removedNames.push(entry.name)
-      } else {
-        coreSkipped++
-      }
+      updatedState = yield* Lib.syncCurrentInstalls(updatedState, scope)
     }
 
-    // Clean up gitignore entries for project-scope removals
-    if (scope === 'project' && removedNames.length > 0) {
-      const gitignoreEntries = removedNames.map((n) => `.claude/skills/${n}`)
-      yield* Lib.manageGitignoreRemove(getRuntimeConfig().projectRoot, gitignoreEntries)
-    }
-
-    // Cleanup all generated routers
-    const routers = yield* Lib.detectGeneratedRouters(scope)
-    for (const router of routers) {
-      yield* Effect.ignore(Effect.tryPromise(() => rm(path.join(dir, router), { recursive: true })))
-    }
-
-    // Clear current installs for this scope
-    const updatedStateAfterClear = Lib.setCurrentInstalls(state, scope, [])
-
-    // Record history
-    const history = Lib.getProjectHistory(updatedStateAfterClear, scope)
+    const history = Lib.getProjectHistory(updatedState, options.scope)
     if (history.undoneCount > 0) {
       history.entries.splice(history.entries.length - history.undoneCount)
       history.undoneCount = 0
     }
     history.entries.push(
-      Lib.OffOp({
-        targets: [],
-        scope,
+      Lib.GraphOp({
+        kind: 'off',
+        scope: options.scope,
+        snapshots: [...affectedScopes].sort().map((scope) => ({
+          afterGeneratedRouters: afterSnapshots.get(scope)?.generatedRouters ?? [],
+          afterSnapshot: afterSnapshots.get(scope)?.snapshot ?? [],
+          beforeGeneratedRouters: beforeSnapshots.get(scope)?.generatedRouters ?? [],
+          beforeSnapshot: beforeSnapshots.get(scope)?.snapshot ?? [],
+          scope,
+        })),
+        targets: targetInput ? Lib.parseTargets(targetInput) : [],
         timestamp: new Date().toISOString(),
-        snapshot: snapshotBefore,
-        generatedRouters: routersBefore,
       }),
     )
     if (history.entries.length > config.skills.historyLimit) {
       history.entries.splice(0, history.entries.length - config.skills.historyLimit)
     }
-    const newState = Lib.setProjectHistory(updatedStateAfterClear, scope, history)
-    yield* Lib.saveState(newState)
-    yield* Lib.syncAgentMirrors(scope, config)
+    updatedState = Lib.setProjectHistory(updatedState, options.scope, history)
+    yield* Lib.saveState(updatedState)
+    yield* Lib.syncAgentMirrors('user', config)
+    yield* Lib.syncAgentMirrors('project', config)
 
-    yield* Console.log(
-      `Reset: ${removed} pluggable skills turned off (${coreSkipped} core skills untouched)`,
+    const deactivatedLines = removedSkills.map((skill) =>
+      SkillGraph.formatSkillRef(skill.scope, skill.colonName),
     )
+    const removedRouters = [...affectedScopes].flatMap((scope) =>
+      [...(removedRoutersByScope.get(scope) ?? [])].map(
+        (routerName) => `router ${SkillGraph.formatSkillRef(scope, routerName)}`,
+      ),
+    )
+
+    yield* printReport([
+      sectionTree('selected', [...new Set(selectedLines)].sort()),
+      sectionTree('deactivated', [...deactivatedLines, ...removedRouters]),
+      sectionTree('cascaded', [...cascadedLines].sort()),
+      sectionTree('skipped', [...new Set(skippedLines)].sort()),
+    ])
     yield* Lib.printSlashCommandNotice
-  })
-
-/** Remove an auto-generated router directory if it exists. */
-export const cleanupRouter = (outfitDir: string, groupName: string, scope: Lib.Scope) =>
-  Effect.gen(function* () {
-    const routerPath = path.join(outfitDir, groupName)
-    const stat = Option.getOrNull(yield* Effect.option(Effect.tryPromise(() => lstat(routerPath))))
-    if (!stat) return
-
-    // Only remove if it's a real directory (not a symlink = not core)
-    // AND it corresponds to a group in one of the libraries
-    if (stat.isDirectory() && !stat.isSymbolicLink()) {
-      for (const libDir of Lib.librarySearchOrder(scope)) {
-        const libPath = path.join(libDir, groupName)
-        const libStat = yield* Effect.option(
-          Effect.tryPromise(async () => {
-            const s = await lstat(libPath)
-            return s
-          }),
-        )
-        const libExists = Option.isSome(libStat) && libStat.value.isDirectory()
-
-        if (libExists) {
-          const nodeType = yield* Lib.getNodeType(libPath)
-          if (nodeType === 'group' || nodeType === 'callable-group') {
-            yield* Effect.ignore(Effect.tryPromise(() => rm(routerPath, { recursive: true })))
-            return
-          }
-        }
-      }
-    }
   })

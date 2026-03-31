@@ -15,6 +15,8 @@ source_files:
   - src/bundled-skills/skills/change/SKILL.md
 ---
 
+If you want the full mental model for how shan evaluates and mutates the skill system, read [Shan state machine](../concepts/state-machine) first. This guide focuses on the hands-on command flows.
+
 ## See what you have
 
 ```sh
@@ -24,9 +26,10 @@ shan skills list
 The output groups skills by scope and status:
 
 - **Core (user)** / **Core (project)** — real directories shan does not manage
-- **Pluggable on (user)** / **Pluggable on (project)** — symlinks from outfit to library, with character cost
+- **Pluggable on (user)** / **Pluggable on (project)** — symlinks from outfit to library, with both own cost and dependency-closure cost
 - **Pluggable off** — in the library but not currently equipped
 - **Budget** — total approximate character cost of all model-visible skills against Claude Code's character budget
+- **Dependency graph** — ASCII visualization of the active dependency graph, including shared nodes
 - **Agent mirrors** — optional mirror directories shan keeps in sync with the canonical Claude outfit
 
 ## Mirror active skills to other agents
@@ -87,22 +90,47 @@ shan skills on playwright
 shan skills on ts:tooling,linear,playwright
 shan skills on ts                              # whole group
 shan skills on --scope user gel                # user-level
+shan skills on dispatch --fail-on-missing-dependencies
 ```
 
 Targets use colon-syntax. A group name (like `ts`) includes all descendant leaf skills. Comma-separated for batches.
 
 If a skill is already on, it's reported as a skip (not an error). Pass `--strict` to treat skips as errors.
 
+Dependencies are first-class. By default, `skills on` activates the full missing dependency closure before mutating the outfit. If you want a dry refusal instead of automatic activation, pass `--fail-on-missing-dependencies`; shan prints the exact dependency closure and the exact rerun command with explicit targets.
+
+Dependency declarations use frontmatter:
+
+```yaml
+---
+name: dispatch
+description: Dispatch work to parallel Claude Code sessions.
+dependencies:
+  - cmux
+---
+```
+
+A dependency may target a standalone skill or a namespace root such as `foo`. Reaching inside a namespace root is invalid: if `foo` is the dependency target, `foo:bar` is not a legal substitute.
+
 ## Turn skills off
 
 ```sh
 shan skills off playwright
 shan skills off ts                             # whole group
+shan skills off cmux --fail-on-dependents
+shan skills off dispatch --cascade-dependencies
 shan skills off                                # reset: turn off ALL pluggable skills
 shan skills off --scope user                   # reset at user scope
 ```
 
-No targets means reset — every pluggable skill in the scope gets turned off.
+No targets means reset — shan starts by selecting every pluggable skill in the scope, then may cascade through dependents in other scopes too if that is required to preserve a valid remaining graph.
+
+`skills off` has two independent graph flags:
+
+- Default behavior cascades through active dependents. Pass `--fail-on-dependents` to refuse instead.
+- Dependency removal is opt-in. Pass `--cascade-dependencies` to also remove the dependency closure of the selected skills.
+
+Both rules are validated against the final remaining graph. If the requested flags would leave the graph invalid, shan aborts before mutating anything.
 
 ## Move skills between scopes
 
@@ -111,10 +139,13 @@ Move a skill from the project library to the user library (or vice versa):
 ```sh
 shan skills move scope up playwright           # project → user
 shan skills move scope down ts:tooling         # user → project
+shan skills move scope up dispatch --cascade-dependencies
 shan skills move scope down tips,linear        # batch move
 ```
 
 `scope up` moves from project to user. `scope down` moves from user to project. The skill's library directory is relocated and the outfit symlink is updated atomically.
+
+Moves are dependency-aware. If a target depends on other skills and the move would break the graph, shan refuses by default. Pass `--cascade-dependencies` to expand the move set downward through the dependency closure. Shan never auto-moves dependents.
 
 ## Move skills between commitments
 
@@ -177,6 +208,12 @@ shan doctor skills                             # detect + auto-fix
 shan doctor skills --no-fix                    # report only
 ```
 
-Doctor runs 14 diagnostic aspects: agent-mirror, broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
+Doctor runs 18 diagnostic aspects: agent-mirror, broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, corrupt-library-entry, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install, dependency-declaration, dependency-cycle, and dependency-active-graph.
 
 Default mode detects and fixes. Use `--no-fix` to see findings without changes.
+
+Dependency-specific doctor behavior:
+
+- invalid dependency declarations are reported but not auto-rewritten
+- active graph drift is auto-fixable when shan can legally activate the missing dependency closure
+- namespace reach-in, cycles, malformed dependency fields, and prohibited cross-scope candidates stay report-only

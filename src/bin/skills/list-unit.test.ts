@@ -4,6 +4,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
+import * as Lib from '../../lib/skill-library.js'
 import { skillsList } from './list.js'
 import { skillsOn } from './on.js'
 import { registerStateFileRestore } from './test-state.js'
@@ -32,6 +33,27 @@ const setupProjectLibrary = async (...skills: string[]) => {
     await mkdir(skillDir, { recursive: true })
     await writeFile(path.join(skillDir, 'SKILL.md'), SKILL_MD(skill))
   }
+}
+
+const writeProjectSkill = async (
+  relPath: string,
+  options: {
+    readonly dependencies?: readonly string[]
+    readonly description?: string
+    readonly name?: string
+  } = {},
+) => {
+  const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+  const skillDir = path.join(libDir, relPath)
+  const name = options.name ?? relPath.replaceAll('/', ':')
+  const dependencies = options.dependencies
+    ? `dependencies:\n${options.dependencies.map((dependency) => `  - ${dependency}`).join('\n')}\n`
+    : ''
+  await mkdir(skillDir, { recursive: true })
+  await writeFile(
+    path.join(skillDir, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: ${options.description ?? `Test skill ${name}`}\n${dependencies}---\n\n# ${name}\n`,
+  )
 }
 
 beforeEach(async () => {
@@ -89,7 +111,7 @@ describe('skillsList', () => {
       console.log = origLog
     }
 
-    expect(output.join('\n')).toContain('Core (project):\n  ● git:sync')
+    expect(output.join('\n')).toContain('Core (project):\n  git:sync [project]  own=')
   })
 
   test('shows off skills from library', async () => {
@@ -121,7 +143,7 @@ describe('skillsList', () => {
       console.log = origLog
     }
 
-    expect(output.join('\n')).toContain('zzlegacy: test-entry')
+    expect(output.join('\n')).toContain('zzlegacy:test-entry [project]')
     expect(output.join('\n')).not.toContain(canonicalName.replace(':', '_'))
   })
 
@@ -183,6 +205,41 @@ describe('skillsList', () => {
     }
   })
 
+  test('prints the default budget explanation and graph issues section', async () => {
+    const output: string[] = []
+    const origLog = console.log
+    const origBudget = process.env['SLASH_COMMAND_TOOL_CHAR_BUDGET']
+    delete process.env['SLASH_COMMAND_TOOL_CHAR_BUDGET']
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(' '))
+    }
+
+    try {
+      await writeProjectSkill('missing-dependency')
+      await writeProjectSkill('broken-owner', { dependencies: ['missing-dependency'] })
+      const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+      await mkdir(outfitDir, { recursive: true })
+      await run(skillsOn('broken-owner', { scope: 'project', strict: false }))
+      await rm(path.join(outfitDir, 'missing-dependency'), { force: true, recursive: true }).catch(
+        () => {},
+      )
+      await run(skillsList())
+    } finally {
+      console.log = origLog
+      if (origBudget !== undefined) {
+        process.env['SLASH_COMMAND_TOOL_CHAR_BUDGET'] = origBudget
+      }
+    }
+
+    const joined = output.join('\n')
+    expect(joined).toContain('default ')
+    expect(joined).toContain('override with SLASH_COMMAND_TOOL_CHAR_BUDGET')
+    expect(joined).toContain('Graph issues:')
+    expect(joined).toContain(
+      'broken-owner [project] -> dependency "missing-dependency" requires missing active skill missing-dependency [project]',
+    )
+  })
+
   test('shows grouped off skills with namespace prefix', async () => {
     // Create a group with multiple leaves
     const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
@@ -209,5 +266,73 @@ describe('skillsList', () => {
     await run(skillsOn('disabled-model', { scope: 'project', strict: false }))
 
     await run(skillsList())
+  })
+
+  test('shows own and dependency-closure costs plus ascii dependency tree', async () => {
+    await writeProjectSkill('shared-base')
+    await writeProjectSkill('top-skill', { dependencies: ['shared-base'] })
+    await run(skillsOn('top-skill', { scope: 'project', strict: false }))
+
+    const output: string[] = []
+    const origLog = console.log
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(' '))
+    }
+
+    try {
+      await run(skillsList())
+    } finally {
+      console.log = origLog
+    }
+
+    const joined = output.join('\n')
+    const topOwnCost = Lib.estimateCharCost({
+      dependencies: ['shared-base'],
+      description: 'Test skill top-skill',
+      name: 'top-skill',
+    })
+    const baseOwnCost = Lib.estimateCharCost({
+      description: 'Test skill shared-base',
+      name: 'shared-base',
+    })
+
+    expect(joined).toContain(`top-skill [project]  own=${topOwnCost}  deps=${baseOwnCost}`)
+    expect(joined).toContain('Dependency graph:')
+    expect(joined).toContain('top-skill [project] (root)')
+    expect(joined).toContain('\\- shared-base [project]')
+  })
+
+  test('excludes disableModelInvocation dependencies from closure cost totals', async () => {
+    const output: string[] = []
+    const origLog = console.log
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(' '))
+    }
+
+    try {
+      const libDir = path.join(TEMP_DIR, '.claude', 'skills-library')
+      const disabledDir = path.join(libDir, 'non-model-dependency')
+      await mkdir(disabledDir, { recursive: true })
+      await writeFile(
+        path.join(disabledDir, 'SKILL.md'),
+        '---\nname: non-model-dependency\ndescription: Hidden dependency\ndisable-model-invocation: true\n---\n# non-model-dependency\n',
+      )
+      await writeProjectSkill('model-consumer', { dependencies: ['non-model-dependency'] })
+
+      await run(skillsOn('model-consumer', { scope: 'project', strict: false }))
+      await run(skillsList())
+    } finally {
+      console.log = origLog
+    }
+
+    const joined = output.join('\n')
+    const consumerOwnCost = Lib.estimateCharCost({
+      dependencies: ['non-model-dependency'],
+      description: 'Test skill model-consumer',
+      name: 'model-consumer',
+    })
+
+    expect(joined).toContain(`model-consumer [project]  own=${consumerOwnCost}  deps=0`)
+    expect(joined).toContain('\\- non-model-dependency [project]')
   })
 })

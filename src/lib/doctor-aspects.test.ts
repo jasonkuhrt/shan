@@ -54,7 +54,7 @@ const makeContext = (overrides: Partial<Aspects.DoctorContext> = {}): Aspects.Do
 
 describe('ALL_ASPECTS', () => {
   test('exports all aspects', () => {
-    expect(Aspects.ALL_ASPECTS.length).toBe(15)
+    expect(Aspects.ALL_ASPECTS.length).toBe(18)
   })
   test('each aspect has required fields', () => {
     for (const aspect of Aspects.ALL_ASPECTS) {
@@ -2432,13 +2432,11 @@ describe('orphaned-router with real outfit', () => {
       })
       const findings = await run(aspect.detect(ctx))
       const orphanFinding = findings.find((f) => f.message.includes(routerName))
-      if (orphanFinding) {
-        expect(orphanFinding.aspect).toBe('orphaned-router')
-        expect(orphanFinding.fixable).toBe(true)
-        // Run the fix
-        const fixResult = await run(orphanFinding.fix!())
-        expect(fixResult).toContain('removed orphaned router')
-      }
+      expect(orphanFinding).toBeDefined()
+      expect(orphanFinding!.aspect).toBe('orphaned-router')
+      expect(orphanFinding!.fixable).toBe(true)
+      const fixResult = await run(orphanFinding!.fix!())
+      expect(fixResult).toContain('removed orphaned router')
     } finally {
       await rm(routerDir, { recursive: true, force: true })
       await rm(libRouterDir, { recursive: true, force: true })
@@ -2495,9 +2493,9 @@ describe('stale-router with real outfit', () => {
         path.join(libRouterDir, 'child', 'SKILL.md'),
         `---\nname: "${routerName}:child"\ndescription: "test child"\n---\nbody`,
       )
-      // Create the router in outfit with outdated content
+      // Create the router in outfit with recognizable but outdated generated content
       await mkdir(routerDir, { recursive: true })
-      await writeFile(path.join(routerDir, 'SKILL.md'), 'outdated content')
+      await writeFile(path.join(routerDir, 'SKILL.md'), Lib.generateRouter(routerName, []))
 
       const outfit = await run(Lib.listOutfit('user'))
       const library = await run(Lib.listLibrary())
@@ -2507,13 +2505,11 @@ describe('stale-router with real outfit', () => {
       })
       const findings = await run(aspect.detect(ctx))
       const staleFinding = findings.find((f) => f.message.includes(routerName))
-      if (staleFinding) {
-        expect(staleFinding.aspect).toBe('stale-router')
-        expect(staleFinding.fixable).toBe(true)
-        // Run the fix
-        const fixResult = await run(staleFinding.fix!())
-        expect(fixResult).toContain('regenerated router')
-      }
+      expect(staleFinding).toBeDefined()
+      expect(staleFinding!.aspect).toBe('stale-router')
+      expect(staleFinding!.fixable).toBe(true)
+      const fixResult = await run(staleFinding!.fix!())
+      expect(fixResult).toContain('regenerated router')
     } finally {
       await rm(routerDir, { recursive: true, force: true })
       await rm(libRouterDir, { recursive: true, force: true })
@@ -2591,11 +2587,10 @@ describe('new-leaf fix execution', () => {
       })
       const findings = await run(aspect.detect(ctx))
       const newLeafFinding = findings.find((f) => f.message.includes(`${groupName}:new-child`))
-      if (newLeafFinding) {
-        expect(newLeafFinding.fixable).toBe(true)
-        const fixResult = await run(newLeafFinding.fix!())
-        expect(fixResult).toContain('symlinked new leaf')
-      }
+      expect(newLeafFinding).toBeDefined()
+      expect(newLeafFinding!.fixable).toBe(true)
+      const fixResult = await run(newLeafFinding!.fix!())
+      expect(fixResult).toContain('symlinked new leaf')
     } finally {
       try {
         await unlink(existingLink)

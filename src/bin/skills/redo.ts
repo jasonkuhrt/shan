@@ -15,6 +15,9 @@ import { cp, lstat, mkdir, rename, rm, symlink, unlink } from 'node:fs/promises'
 import * as Lib from '../../lib/skill-library.js'
 import { getRuntimeConfig } from '../../lib/runtime-config.js'
 
+const ignoreError = () => Effect.void
+const returnFalse = () => Effect.succeed(false)
+
 export const skillsRedo = (n: number, scope: Lib.Scope) =>
   Effect.gen(function* () {
     const state = yield* Lib.loadState()
@@ -61,6 +64,15 @@ const redoEntry = (entry: Lib.HistoryEntry, scope: Lib.Scope): Effect.Effect<voi
   if (entry._tag === 'OffOp') {
     return redoOffOp(entry, scope)
   }
+  if (entry._tag === 'GraphOp') {
+    return Effect.forEach(entry.snapshots, (snapshot) =>
+      Lib.restoreSnapshot(
+        snapshot.afterSnapshot,
+        snapshot.afterGeneratedRouters,
+        Lib.resolveHistoryScope(snapshot.scope),
+      ),
+    ).pipe(Effect.asVoid)
+  }
   if (entry._tag === 'MoveOp') {
     return redoMoveOp(entry)
   }
@@ -87,7 +99,7 @@ const redoOnOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OnOp' }, scope: Li
       const linkPath = path.join(dir, flatName)
 
       const already = yield* Effect.tryPromise(() => lstat(linkPath).then(() => true)).pipe(
-        Effect.catchAll(() => Effect.succeed(false)),
+        Effect.catchAll(returnFalse),
       )
       if (already) continue
 
@@ -96,10 +108,10 @@ const redoOnOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OnOp' }, scope: Li
       const libPath = path.join(libDir, relPath)
       const libExists = yield* Effect.tryPromise(() =>
         lstat(libPath).then((s) => s.isDirectory()),
-      ).pipe(Effect.catchAll(() => Effect.succeed(false)))
+      ).pipe(Effect.catchAll(returnFalse))
       if (libExists) {
         yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(
-          Effect.catchAll(() => Effect.void),
+          Effect.catchAll(ignoreError),
         )
         if (scope === 'project') {
           gitignoreEntries.push(`.claude/skills/${flatName}`)
@@ -123,7 +135,7 @@ const redoOffOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OffOp' }, scope: 
       for (const e of outfit) {
         if (e.commitment === 'pluggable') {
           yield* Effect.tryPromise(() => unlink(path.join(dir, e.name))).pipe(
-            Effect.catchAll(() => Effect.void),
+            Effect.catchAll(ignoreError),
           )
           removedNames.push(e.name)
         }
@@ -132,7 +144,7 @@ const redoOffOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OffOp' }, scope: 
       const routers = yield* Lib.detectGeneratedRouters(scope)
       for (const router of routers) {
         yield* Effect.tryPromise(() => rm(path.join(dir, router), { recursive: true })).pipe(
-          Effect.catchAll(() => Effect.void),
+          Effect.catchAll(ignoreError),
         )
       }
       // Clean up gitignore entries for project scope
@@ -154,7 +166,7 @@ const redoOffOp = (entry: Lib.HistoryEntry & { readonly _tag: 'OffOp' }, scope: 
 
       const { flatName } = targetPaths
       const linkPath = path.join(dir, flatName)
-      yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
+      yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(ignoreError))
       if (scope === 'project') {
         gitignoreRemovals.push(`.claude/skills/${flatName}`)
       }
@@ -210,11 +222,11 @@ const replaySubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> =>
         const libPath = path.join(libDir, relPath)
         const exists = yield* Effect.tryPromise(() =>
           lstat(libPath).then((s) => s.isDirectory()),
-        ).pipe(Effect.catchAll(() => Effect.succeed(false)))
+        ).pipe(Effect.catchAll(returnFalse))
         if (exists) {
           yield* Effect.tryPromise(() => mkdir(path.dirname(linkPath), { recursive: true }))
           yield* Effect.tryPromise(() => symlink(libPath, linkPath)).pipe(
-            Effect.catchAll(() => Effect.void),
+            Effect.catchAll(ignoreError),
           )
         }
       }
@@ -233,7 +245,7 @@ const replaySubAction = (sub: Lib.HistoryEntry): Effect.Effect<void, unknown> =>
         const { flatName } = targetPaths
         const outfitDir = Lib.resolveHistoryOutfitDir(sub.scope)
         const linkPath = path.join(outfitDir, flatName)
-        yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(() => Effect.void))
+        yield* Effect.tryPromise(() => unlink(linkPath)).pipe(Effect.catchAll(ignoreError))
       }
     })
   }

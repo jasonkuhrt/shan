@@ -873,7 +873,7 @@ describe('readFrontmatter', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
-  test('handles multi-line indicator (>-) by skipping', async () => {
+  test('parses folded block scalars with strip chomping (>-)', async () => {
     const dir = path.join(tmpBase, 'fm-test-4')
     try {
       await mkdir(dir, { recursive: true })
@@ -882,12 +882,12 @@ describe('readFrontmatter', () => {
         `---\nname: "x"\ndescription: >-\n  multi line\n---\nBody`,
       )
       const fm = await run(Lib.readFrontmatter(dir))
-      expect(fm?.description).toBe('')
+      expect(fm?.description).toBe('multi line')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
-  test('handles multi-line indicator (>) by skipping', async () => {
+  test('parses folded block scalars with clip chomping (>)', async () => {
     const dir = path.join(tmpBase, 'fm-test-4b')
     try {
       await mkdir(dir, { recursive: true })
@@ -896,7 +896,7 @@ describe('readFrontmatter', () => {
         `---\nname: "x"\ndescription: >\n  multi line\n---\nBody`,
       )
       const fm = await run(Lib.readFrontmatter(dir))
-      expect(fm?.description).toBe('')
+      expect(fm?.description).toBe('multi line\n')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

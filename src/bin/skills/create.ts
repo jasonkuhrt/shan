@@ -27,6 +27,7 @@ name: ${yamlQuote(name)}
 description: >-
   TODO: Describe when this skill should be triggered. Include specific phrases,
   commands, or contexts that should activate it.
+dependencies: []
 ---
 
 # ${name}

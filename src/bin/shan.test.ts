@@ -7,13 +7,20 @@ import * as path from 'node:path'
 import {
   parseArgs,
   resolveScope,
+  resolveSkillsOffScope,
+  resolveSkillsMoveScope,
   resolveSkillsOnScope,
+  resolveSkillsScope,
   QUIET_ERRORS,
   program,
   run,
 } from './shan.js'
 import type { ParsedFlags } from './shan.js'
 import * as Lib from '../lib/skill-library.js'
+import {
+  resetRuntimeConfigOverrides,
+  replaceRuntimeConfigOverrides,
+} from '../lib/runtime-config.js'
 
 const defaultFlags: ParsedFlags = {
   raw: false,
@@ -23,6 +30,9 @@ const defaultFlags: ParsedFlags = {
   strict: false,
   global: false,
   noFix: false,
+  failOnMissingDependencies: false,
+  cascadeDependencies: false,
+  failOnDependents: false,
   show: [],
   skill: [],
   scope: '',
@@ -198,6 +208,256 @@ describe('resolveSkillsOnScope', () => {
       process.chdir(origCwd)
       await rm(dir, { recursive: true, force: true })
       await rm(skillDir, { recursive: true, force: true })
+    }
+  })
+
+  test('falls back to user scope when the project library exists but only the user library has the target', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-user-fallback-'))
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-user-home-'))
+    const origCwd = process.cwd()
+
+    try {
+      replaceRuntimeConfigOverrides({ homeDir, projectRoot: dir })
+      process.chdir(dir)
+
+      await mkdir(path.join(dir, '.claude', 'skills-library', 'project-only'), { recursive: true })
+      await writeFile(
+        path.join(dir, '.claude', 'skills-library', 'project-only', 'SKILL.md'),
+        '---\nname: project-only\ndescription: Project skill\n---\n# project-only\n',
+      )
+      await mkdir(path.join(homeDir, '.claude', 'skills-library', 'user-only'), { recursive: true })
+      await writeFile(
+        path.join(homeDir, '.claude', 'skills-library', 'user-only', 'SKILL.md'),
+        '---\nname: user-only\ndescription: User skill\n---\n# user-only\n',
+      )
+
+      await expect(
+        Effect.runPromise(resolveSkillsOnScope(makeFlags({}), 'user-only')),
+      ).resolves.toBe('user')
+    } finally {
+      resetRuntimeConfigOverrides()
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+      await rm(homeDir, { recursive: true, force: true })
+    }
+  })
+
+  test('falls back to project scope when both libraries exist but the target is missing everywhere', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-missing-everywhere-'))
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-missing-home-'))
+    const origCwd = process.cwd()
+
+    try {
+      replaceRuntimeConfigOverrides({ homeDir, projectRoot: dir })
+      process.chdir(dir)
+
+      await mkdir(path.join(dir, '.claude', 'skills-library'), { recursive: true })
+      await mkdir(path.join(homeDir, '.claude', 'skills-library'), { recursive: true })
+
+      await expect(
+        Effect.runPromise(resolveSkillsOnScope(makeFlags({}), 'missing-everywhere')),
+      ).resolves.toBe('project')
+    } finally {
+      resetRuntimeConfigOverrides()
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+      await rm(homeDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('resolveSkillsMoveScope', () => {
+  test('defaults move scope up to project scope', async () => {
+    await expect(
+      Effect.runPromise(resolveSkillsMoveScope(makeFlags({}), 'scope', 'up', 'foo')),
+    ).resolves.toBe('project')
+  })
+
+  test('defaults move scope down to user scope', async () => {
+    await expect(
+      Effect.runPromise(resolveSkillsMoveScope(makeFlags({}), 'scope', 'down', 'foo')),
+    ).resolves.toBe('user')
+  })
+
+  test('prefers the active user outfit for commitment-up moves when names are shadowed', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-move-user-outfit-'))
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-move-home-'))
+    const origCwd = process.cwd()
+
+    try {
+      replaceRuntimeConfigOverrides({ homeDir, projectRoot: dir })
+      process.chdir(dir)
+
+      await mkdir(path.join(dir, '.claude', 'skills-library', 'shared-skill'), { recursive: true })
+      await writeFile(
+        path.join(dir, '.claude', 'skills-library', 'shared-skill', 'SKILL.md'),
+        '---\nname: shared-skill\ndescription: Project skill\n---\n# shared-skill\n',
+      )
+      await mkdir(path.join(homeDir, '.claude', 'skills-library', 'shared-skill'), {
+        recursive: true,
+      })
+      await writeFile(
+        path.join(homeDir, '.claude', 'skills-library', 'shared-skill', 'SKILL.md'),
+        '---\nname: shared-skill\ndescription: User skill\n---\n# shared-skill\n',
+      )
+      await mkdir(path.join(homeDir, '.claude', 'skills', 'shared-skill'), { recursive: true })
+      await writeFile(path.join(homeDir, '.claude', 'skills', 'shared-skill', 'SKILL.md'), '# core')
+
+      await expect(
+        Effect.runPromise(
+          resolveSkillsMoveScope(makeFlags({}), 'commitment', 'up', 'shared-skill'),
+        ),
+      ).resolves.toBe('user')
+    } finally {
+      resetRuntimeConfigOverrides()
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+      await rm(homeDir, { recursive: true, force: true })
+    }
+  })
+
+  test('falls back to user library visibility for commitment-up moves', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-move-user-lib-'))
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-move-user-lib-home-'))
+    const origCwd = process.cwd()
+
+    try {
+      replaceRuntimeConfigOverrides({ homeDir, projectRoot: dir })
+      process.chdir(dir)
+
+      await mkdir(path.join(dir, '.claude', 'skills-library'), { recursive: true })
+      await mkdir(path.join(homeDir, '.claude', 'skills-library', 'user-only-move'), {
+        recursive: true,
+      })
+      await writeFile(
+        path.join(homeDir, '.claude', 'skills-library', 'user-only-move', 'SKILL.md'),
+        '---\nname: user-only-move\ndescription: User move skill\n---\n# user-only-move\n',
+      )
+
+      await expect(
+        Effect.runPromise(
+          resolveSkillsMoveScope(makeFlags({}), 'commitment', 'up', 'user-only-move'),
+        ),
+      ).resolves.toBe('user')
+    } finally {
+      resetRuntimeConfigOverrides()
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+      await rm(homeDir, { recursive: true, force: true })
+    }
+  })
+
+  test('falls back to project when commitment-down targets are missing everywhere', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-move-missing-'))
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-move-missing-home-'))
+    const origCwd = process.cwd()
+
+    try {
+      replaceRuntimeConfigOverrides({ homeDir, projectRoot: dir })
+      process.chdir(dir)
+
+      await mkdir(path.join(dir, '.claude', 'skills-library'), { recursive: true })
+      await mkdir(path.join(homeDir, '.claude', 'skills-library'), { recursive: true })
+
+      await expect(
+        Effect.runPromise(
+          resolveSkillsMoveScope(makeFlags({}), 'commitment', 'down', 'missing-move-target'),
+        ),
+      ).resolves.toBe('project')
+    } finally {
+      resetRuntimeConfigOverrides()
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+      await rm(homeDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('resolveSkillsOffScope', () => {
+  test('prefers the active user outfit before shadowed project library matches', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-off-user-outfit-'))
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-off-home-'))
+    const origCwd = process.cwd()
+
+    try {
+      replaceRuntimeConfigOverrides({ homeDir, projectRoot: dir })
+      process.chdir(dir)
+
+      await mkdir(path.join(dir, '.claude', 'skills-library', 'shared-skill'), { recursive: true })
+      await writeFile(
+        path.join(dir, '.claude', 'skills-library', 'shared-skill', 'SKILL.md'),
+        '---\nname: shared-skill\ndescription: Project skill\n---\n# shared-skill\n',
+      )
+      await mkdir(path.join(homeDir, '.claude', 'skills-library', 'shared-skill'), {
+        recursive: true,
+      })
+      await writeFile(
+        path.join(homeDir, '.claude', 'skills-library', 'shared-skill', 'SKILL.md'),
+        '---\nname: shared-skill\ndescription: User skill\n---\n# shared-skill\n',
+      )
+      await mkdir(path.join(homeDir, '.claude', 'skills', 'shared-skill'), { recursive: true })
+      await writeFile(
+        path.join(homeDir, '.claude', 'skills', 'shared-skill', 'SKILL.md'),
+        '---\nname: shared-skill\ndescription: Installed user skill\n---\n# shared-skill\n',
+      )
+
+      await expect(
+        Effect.runPromise(resolveSkillsOffScope(makeFlags({}), 'shared-skill')),
+      ).resolves.toBe('user')
+    } finally {
+      resetRuntimeConfigOverrides()
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+      await rm(homeDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('resolveSkillsScope', () => {
+  test('history commands prefer the scope with the most recent active entry', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-history-'))
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-resolve-history-home-'))
+    const origCwd = process.cwd()
+
+    try {
+      replaceRuntimeConfigOverrides({ homeDir, projectRoot: dir })
+      process.chdir(dir)
+
+      let state = await Effect.runPromise(Lib.loadState())
+      state = Lib.setProjectHistory(state, 'project', {
+        entries: [
+          Lib.GraphOp({
+            kind: 'on',
+            scope: 'project',
+            snapshots: [],
+            targets: ['project-skill'],
+            timestamp: '2026-01-01T00:00:00.000Z',
+          }),
+        ],
+        undoneCount: 0,
+      })
+      state = Lib.setProjectHistory(state, 'user', {
+        entries: [
+          Lib.GraphOp({
+            kind: 'on',
+            scope: 'user',
+            snapshots: [],
+            targets: ['user-skill'],
+            timestamp: '2026-02-01T00:00:00.000Z',
+          }),
+        ],
+        undoneCount: 0,
+      })
+      await Effect.runPromise(Lib.saveState(state))
+
+      await expect(
+        Effect.runPromise(resolveSkillsScope(makeFlags({}), 'history', '')),
+      ).resolves.toBe('user')
+    } finally {
+      resetRuntimeConfigOverrides()
+      process.chdir(origCwd)
+      await rm(dir, { recursive: true, force: true })
+      await rm(homeDir, { recursive: true, force: true })
     }
   })
 })

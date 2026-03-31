@@ -49,6 +49,8 @@ Skills use colon-syntax for hierarchical names: `ts:tooling`, `flo:next`. Target
 
 Every mutation (on, off, move) is recorded in `state.json` with a snapshot, so `undo` and `redo` restore the outfit to an exact prior state.
 
+For the full end-to-end model of what shan reads, writes, validates, and restores, see [Shan state machine](./state-machine).
+
 ## How shan thinks about transcripts
 
 Claude Code writes session transcripts as JSONL files in `~/.claude/projects/<encoded-path>/<uuid>.jsonl`. Each line is a typed entry: `user`, `assistant`, `summary`, `system`, `progress`, `file-history-snapshot`, or `queue-operation`.
