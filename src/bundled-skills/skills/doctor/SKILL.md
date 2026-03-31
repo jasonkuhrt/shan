@@ -9,20 +9,20 @@ allowed-tools:
 
 # /skills:doctor — Skill Health Checks
 
-Run aspect-based diagnostics on the skill outfit via the shan CLI.
+Run aspect-based diagnostics on the skill outfit via the root doctor CLI.
 
 ## Commands
 
 ### Detect + auto-fix (default)
 
 ```bash
-bun x @jasonkuhrt/shan skills doctor
+bun x @jasonkuhrt/shan doctor skills
 ```
 
 ### Report only (no changes)
 
 ```bash
-bun x @jasonkuhrt/shan skills doctor --no-fix
+bun x @jasonkuhrt/shan doctor skills --no-fix
 ```
 
 ## 14 Diagnostic Aspects

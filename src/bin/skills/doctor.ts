@@ -1,5 +1,5 @@
 /**
- * shan skills doctor — Run aspect-based health checks on the skills system.
+ * Shared skill-health checks used by `shan doctor skills`.
  *
  * Default: detect + auto-fix. Use --no-fix for report-only mode.
  */
@@ -57,8 +57,8 @@ export const collectDoctorFindings = (scope: Lib.Scope) =>
     if (!ctx) return null
 
     // ── Resolve disabled aspects ──────────────────────────────────
-    const disabled = new Set(ctx.config.skills.doctor?.disabled ?? [])
-    const aspects = ALL_ASPECTS.filter((a) => !disabled.has(a.name))
+    const disabled = new Set(ctx.config.doctor?.disabled ?? [])
+    const aspects = ALL_ASPECTS.filter((a) => !disabled.has(`skills/${a.name}`))
 
     // ── Run detection ─────────────────────────────────────────────
     const allFindings: DoctorFinding[] = []
@@ -202,7 +202,7 @@ export const skillsDoctor = (options: DoctorOptions = { noFix: false }) =>
       if (initialFixable.length > 0) {
         yield* Console.log('')
         yield* Console.log(
-          `  Run \`shan skills doctor\` to auto-fix ${initialFixable.length} of ${initialFindings.length} issues`,
+          `  Run \`shan doctor skills\` to auto-fix ${initialFixable.length} of ${initialFindings.length} issues`,
         )
       }
     }

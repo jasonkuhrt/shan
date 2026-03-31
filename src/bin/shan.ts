@@ -7,12 +7,14 @@
  *   shan <namespace> <command> [args...]
  *
  * Namespaces:
+ *   doctor        Health checks and static analysis
  *   transcript    Transcript manipulation commands
  *   task          Task list inspection commands
- *   skills        Skill library and outfit management
+ *   skills | s    Skill library and outfit management
  */
 
 import { Console, Effect } from 'effect'
+import { doctor } from './doctor.js'
 import { transcriptDump } from './transcript/dump.js'
 import { transcriptAnalyze } from './transcript/analyze.js'
 import { transcriptPrint } from './transcript/print.js'
@@ -25,15 +27,11 @@ import { skillsList } from './skills/list.js'
 import { skillsHistory } from './skills/history.js'
 import { skillsUndo } from './skills/undo.js'
 import { skillsRedo } from './skills/redo.js'
-import { skillsDoctor } from './skills/doctor.js'
 import { skillsMigrate } from './skills/migrate.js'
 import { skillsMove } from './skills/move.js'
 import { skillsInstall } from './skills/install.js'
 import { skillsInstallUser } from './skills/install-user.js'
 import { skillsCreate } from './skills/create.js'
-import { lintHooks } from './lint/hooks.js'
-import { buildLintContext } from './lint/context.js'
-import { renderFinding, renderSummary } from './lint/finding.js'
 import type { MoveAxis, MoveDirection } from './skills/move.js'
 import type { Scope } from '../lib/skill-library.js'
 import * as Lib from '../lib/skill-library.js'
@@ -46,13 +44,16 @@ Usage:
   shan <namespace> <command> [target] [options]
 
 Namespaces:
+  doctor        Health checks and static analysis
   transcript    Transcript manipulation commands
   task          Task list inspection commands
-  skills        Skill library and outfit management
-  lint          Static analysis for Claude Code configuration
+  skills | s    Skill library and outfit management
 
 Commands:
   shan init                             Scaffold missing project agent rule files
+  shan doctor [selector]                Run doctor checks across namespaces
+  shan doctor skills                    Run skills/* checks
+  shan doctor config                    Run config/* checks
 
   shan transcript print [target]        Print readable conversation log
   shan transcript dump [target]         Dump transcript as navigable Markdown
@@ -63,7 +64,7 @@ Commands:
   shan task dump --md [target]          Convert tasks to Markdown
   shan task open [target]               Open task list or file in editor
 
-  shan skills                           Show outfit (default: list)
+  shan skills | shan s                  Show outfit (default: list)
   shan skills on <targets>              Turn on skills/groups (comma-separated)
   shan skills off [targets]             Turn off skills/groups (no targets = reset all)
   shan skills move <axis> <dir> <tgt>   Migrate between scopes or commitments
@@ -71,15 +72,13 @@ Commands:
   shan skills history                   Show operation log
   shan skills undo [N]                  Undo last N operations (default: 1)
   shan skills redo [N]                  Redo last N undone operations (default: 1)
-  shan skills doctor                    Run health checks
   shan skills create <name>             Scaffold a new skill with SKILL.md template
   shan skills install <source>          Import skills from skills.sh into shan
   shan skills install-user              Install bundled shan skills at user scope
 
-  shan lint hooks                       Check hook/statusLine paths in settings
-
 Options:
   --all                Show all sessions/task lists (default: current project only)
+  --no-fix             Report doctor findings without applying fixes
   --show <layers>      Add detail layers to print: results,diffs,thinking,trace,all
   --scope user         Operate on user outfit (default: project)
   --global             Alias for --scope user
@@ -106,7 +105,6 @@ Available commands:
   history                   Show operation log
   undo [N]                  Undo last N operations
   redo [N]                  Redo last N undone operations
-  doctor [--no-fix]         Run health checks
   create <name>             Scaffold a new skill with SKILL.md template
   install <source>          Import skills from skills.sh into shan
   migrate [--execute]       Migrate from flat inventory to hierarchical library
@@ -262,6 +260,13 @@ export const program = Effect.gen(function* () {
 
   if (namespace === 'init') {
     yield* shanInit()
+  } else if (namespace === 'doctor') {
+    const { flags, positional } = parseArgs(command ? [command, ...args] : args)
+    yield* doctor({
+      selector: positional[0] ?? '',
+      noFix: flags.noFix,
+      scope: resolveScope(flags),
+    })
   } else if (namespace === 'transcript') {
     const { flags, positional } = parseArgs(args)
 
@@ -292,7 +297,7 @@ export const program = Effect.gen(function* () {
       )
       return yield* Effect.fail(new Error('Unknown command'))
     }
-  } else if (namespace === 'skills') {
+  } else if (namespace === 'skills' || namespace === 's') {
     const { flags, positional } = parseArgs(args)
     const targetInput = command === 'move' ? (positional[2] ?? '') : (positional[0] ?? '')
     const scope = yield* resolveSkillsScope(flags, command ?? '', targetInput)
@@ -320,8 +325,6 @@ export const program = Effect.gen(function* () {
       yield* skillsUndo(Number(positional[0]) || 1, scope)
     } else if (command === 'redo') {
       yield* skillsRedo(Number(positional[0]) || 1, scope)
-    } else if (command === 'doctor') {
-      yield* skillsDoctor({ noFix: flags.noFix, scope })
     } else if (command === 'migrate') {
       yield* skillsMigrate({ execute: flags.execute })
     } else if (command === 'create') {
@@ -339,36 +342,6 @@ export const program = Effect.gen(function* () {
       yield* Console.log('\n' + SKILLS_USAGE)
       return yield* Effect.fail(new Error('Unknown command'))
     }
-  } else if (namespace === 'lint') {
-    if (command && command !== 'hooks') {
-      yield* Console.error(`Unknown lint command: ${command}`)
-      yield* Console.log(
-        '\nAvailable commands:\n  hooks    Check hook/statusLine paths in settings',
-      )
-      return yield* Effect.fail(new Error('Unknown command'))
-    }
-
-    const ctx = buildLintContext()
-    if (ctx.settingsFiles.length === 0) {
-      yield* Console.log('lint: no settings files found')
-      return
-    }
-    yield* Console.log(
-      `lint: checking ${ctx.settingsFiles.length} settings file${ctx.settingsFiles.length > 1 ? 's' : ''}...`,
-    )
-    yield* Console.log('')
-
-    // Collect findings from requested (or all) rules
-    const findings = lintHooks(ctx)
-
-    for (const f of findings) {
-      yield* renderFinding(f)
-    }
-    yield* renderSummary(findings)
-
-    if (findings.some((f) => f.severity === 'error')) {
-      return yield* Effect.fail(new Error('Lint errors found'))
-    }
   } else {
     yield* Console.error(`Unknown namespace: ${namespace}`)
     yield* Console.log(USAGE)
@@ -384,6 +357,7 @@ export const QUIET_ERRORS = new Set([
   'Skill already exists',
   'Some targets failed',
   'Lint errors found',
+  'Doctor errors found',
 ])
 
 export const run = async () => {

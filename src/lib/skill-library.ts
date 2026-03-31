@@ -424,9 +424,9 @@ export interface ShanConfig {
     historyLimit: number
     defaultScope: Scope
     agents: 'auto' | Agent[]
-    doctor?: {
-      disabled?: string[]
-    }
+  }
+  doctor?: {
+    disabled?: string[]
   }
 }
 
@@ -596,7 +596,7 @@ export const loadConfig = (): Effect.Effect<ShanConfig> =>
       if (!isRecord(parsed)) return DEFAULT_CONFIG
 
       const skills = getObject(parsed, 'skills')
-      const doctor = skills ? getObject(skills, 'doctor') : undefined
+      const doctor = getObject(parsed, 'doctor')
       const defaultScope = skills ? getString(skills, 'defaultScope') : undefined
 
       return {
@@ -610,8 +610,8 @@ export const loadConfig = (): Effect.Effect<ShanConfig> =>
               ? defaultScope
               : DEFAULT_CONFIG.skills.defaultScope,
           agents: parseConfiguredAgents(skills),
-          ...(doctor ? { doctor: { disabled: getStringArray(doctor, 'disabled') } } : {}),
         },
+        ...(doctor ? { doctor: { disabled: getStringArray(doctor, 'disabled') } } : {}),
       } satisfies ShanConfig
     } catch {
       return DEFAULT_CONFIG

@@ -239,33 +239,33 @@ describe('program', () => {
     })
   })
 
-  test('lint hooks dispatches and completes', async () => {
-    await withArgv(['lint', 'hooks'], async () => {
+  test('doctor config dispatches and completes', async () => {
+    await withArgv(['doctor', 'config'], async () => {
       try {
         await Effect.runPromise(program)
       } catch {
-        /* lint errors are expected */
+        /* doctor errors are expected */
       }
     })
   })
 
-  test('lint with no subcommand dispatches hooks', async () => {
-    await withArgv(['lint'], async () => {
+  test('doctor with no selector dispatches all namespaces', async () => {
+    await withArgv(['doctor'], async () => {
       try {
         await Effect.runPromise(program)
       } catch {
-        /* lint errors are expected */
+        /* doctor errors are expected */
       }
     })
   })
 
-  test('lint unknown subcommand fails', async () => {
-    await withArgv(['lint', 'bogus'], async () => {
+  test('doctor unknown selector fails', async () => {
+    await withArgv(['doctor', 'bogus'], async () => {
       await expect(Effect.runPromise(program)).rejects.toThrow('Unknown command')
     })
   })
 
-  test('lint exits cleanly when no settings files are present', async () => {
+  test('doctor exits cleanly when no settings files or skills library are present', async () => {
     const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-lint-home-'))
     const projectDir = await mkdtemp(path.join(tmpdir(), 'shan-lint-project-'))
     const origHome = process.env['HOME']
@@ -275,7 +275,7 @@ describe('program', () => {
       process.env['HOME'] = homeDir
       process.chdir(projectDir)
 
-      await withArgv(['lint'], async () => {
+      await withArgv(['doctor'], async () => {
         await Effect.runPromise(program)
       })
     } finally {
@@ -313,7 +313,7 @@ describe('program', () => {
     }
   })
 
-  test('lint fails when hook findings include errors', async () => {
+  test('doctor fails when config findings include errors', async () => {
     const homeDir = await mkdtemp(path.join(tmpdir(), 'shan-lint-home-'))
     const projectDir = await mkdtemp(path.join(tmpdir(), 'shan-lint-project-'))
     const origHome = process.env['HOME']
@@ -336,8 +336,8 @@ describe('program', () => {
         }),
       )
 
-      await withArgv(['lint'], async () => {
-        await expect(Effect.runPromise(program)).rejects.toThrow('Lint errors found')
+      await withArgv(['doctor', 'config'], async () => {
+        await expect(Effect.runPromise(program)).rejects.toThrow('Doctor errors found')
       })
     } finally {
       process.env['HOME'] = origHome
@@ -425,6 +425,16 @@ describe('program', () => {
     })
   })
 
+  test('s alias dispatches to skills', async () => {
+    await withArgv(['s'], async () => {
+      try {
+        await Effect.runPromise(program)
+      } catch {
+        /* expected */
+      }
+    })
+  })
+
   test('skills on dispatches', async () => {
     await withArgv(['skills', 'on', '__nonexistent__'], async () => {
       try {
@@ -491,8 +501,8 @@ describe('program', () => {
     })
   })
 
-  test('skills doctor dispatches', async () => {
-    await withArgv(['skills', 'doctor', '--no-fix'], async () => {
+  test('doctor skills dispatches', async () => {
+    await withArgv(['doctor', 'skills', '--no-fix'], async () => {
       try {
         await Effect.runPromise(program)
       } catch {

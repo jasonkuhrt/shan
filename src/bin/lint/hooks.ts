@@ -1,5 +1,5 @@
 /**
- * shan lint hooks — Check Claude Code settings for hook path issues.
+ * Config doctor rule support — check Claude Code settings for hook path issues.
  *
  * Detects relative paths in hook commands that break when Claude changes
  * the working directory. Reports findings with links to official docs and

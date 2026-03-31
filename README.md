@@ -30,13 +30,16 @@ just install-skills-user
 
 ```sh
 shan skills list
+shan doctor skills
+shan doctor config
+shan s list
 shan skills install vercel-labs/agent-skills --skill typed-api-dx-review
-shan skills doctor
 ```
 
 - `skills list` shows the effective outfit, budget usage, and any configured agent mirrors.
 - `skills install` imports external `skills.sh` skills into shan's own library/outfit model.
-- `skills doctor` audits and repairs common drift, including missing or messy Codex mirrors.
+- `doctor skills` audits and repairs skill drift, including missing or messy Codex mirrors.
+- `doctor config` checks Claude settings for path hazards such as relative hook commands.
 
 ## Commands
 
@@ -68,6 +71,7 @@ shan task open [target]                        # open in $EDITOR
 
 ```sh
 shan skills                                    # show outfit (default: list)
+shan s                                         # alias for skills
 shan skills on playwright,linear               # turn on skills
 shan skills off ts                             # turn off a group
 shan skills off                                # reset: off all pluggable
@@ -76,9 +80,18 @@ shan skills move commitment down playwright    # core → pluggable
 shan skills history                            # operation log
 shan skills undo                               # undo last operation
 shan skills redo                               # redo last undone
-shan skills doctor                             # 14-aspect health checks + auto-fix
 shan skills install vercel-labs/agent-skills --skill typed-api-dx-review
 shan skills install-user                       # install bundled shan skills
+```
+
+### Doctor
+
+```sh
+shan doctor                                    # run all doctor checks
+shan doctor skills                             # run skill health checks
+shan doctor skills --no-fix                    # report-only skill checks
+shan doctor config                             # run Claude settings checks
+shan doctor config/no-relative-hook-path       # target one config rule
 ```
 
 ### Targeting

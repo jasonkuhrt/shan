@@ -173,8 +173,8 @@ Shows the operation log: what changed, when, and the targets involved.
 ## Run health checks
 
 ```sh
-shan skills doctor                             # detect + auto-fix
-shan skills doctor --no-fix                    # report only
+shan doctor skills                             # detect + auto-fix
+shan doctor skills --no-fix                    # report only
 ```
 
 Doctor runs 14 diagnostic aspects: agent-mirror, broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.

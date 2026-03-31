@@ -60,15 +60,15 @@ const setupTestEnv = async (): Promise<TestEnv> => {
 
 // ── Tests ────────────────────────────────────────────────
 
-describe('shan lint hooks', () => {
+describe('shan doctor config', () => {
   test('passes when no settings files exist', async () => {
     const env = await setupTestEnv()
     // Remove the default dirs so no settings files are found
     await rm(path.join(env.home, '.claude'), { recursive: true, force: true })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(0)
-      expect(stdout).toContain('no settings files found')
+      expect(stdout).toContain('skipped config/*: no Claude settings files found')
     } finally {
       await env.cleanup()
     }
@@ -78,7 +78,7 @@ describe('shan lint hooks', () => {
     const env = await setupTestEnv()
     await env.writeUserSettings({})
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(0)
       expect(stdout).toContain('all clear')
     } finally {
@@ -96,7 +96,7 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(0)
       expect(stdout).toContain('all clear')
     } finally {
@@ -117,7 +117,7 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(0)
       expect(stdout).toContain('all clear')
     } finally {
@@ -143,7 +143,7 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(0)
       expect(stdout).toContain('all clear')
     } finally {
@@ -161,7 +161,7 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(0)
       expect(stdout).toContain('all clear')
     } finally {
@@ -175,7 +175,7 @@ describe('shan lint hooks', () => {
       statusLine: { type: 'command', command: '~/.claude/statusline.sh' },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(0)
       expect(stdout).toContain('all clear')
     } finally {
@@ -195,9 +195,9 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(1)
-      expect(stdout).toContain('no-relative-hook-path')
+      expect(stdout).toContain('config/no-relative-hook-path')
       expect(stdout).toContain('.claude/hooks/scripts/foo.sh')
       expect(stdout).toContain('Relative path breaks')
     } finally {
@@ -218,9 +218,9 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(1)
-      expect(stdout).toContain('no-relative-hook-path')
+      expect(stdout).toContain('config/no-relative-hook-path')
       expect(stdout).toContain('./scripts/guard.sh')
     } finally {
       await env.cleanup()
@@ -237,9 +237,9 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(1)
-      expect(stdout).toContain('no-relative-hook-path')
+      expect(stdout).toContain('config/no-relative-hook-path')
       expect(stdout).toContain('.claude/hooks/check.js')
     } finally {
       await env.cleanup()
@@ -252,9 +252,9 @@ describe('shan lint hooks', () => {
       statusLine: { type: 'command', command: 'scripts/statusline.sh' },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(1)
-      expect(stdout).toContain('no-relative-hook-path')
+      expect(stdout).toContain('config/no-relative-hook-path')
       expect(stdout).toContain('statusLine')
     } finally {
       await env.cleanup()
@@ -271,7 +271,7 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout } = await env.run(['lint', 'hooks'])
+      const { stdout } = await env.run(['doctor', 'config'])
       expect(stdout).toContain('Happy paths:')
       expect(stdout).toContain('$CLAUDE_PROJECT_DIR prefix')
       expect(stdout).toContain('~ home-relative path')
@@ -289,7 +289,7 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout } = await env.run(['lint', 'hooks'])
+      const { stdout } = await env.run(['doctor', 'config'])
       expect(stdout).toContain('References:')
       expect(stdout).toContain('github.com/anthropics/claude-code/issues/3583')
       expect(stdout).toContain('github.com/anthropics/claude-code/issues/4198')
@@ -308,7 +308,7 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout } = await env.run(['lint', 'hooks'])
+      const { stdout } = await env.run(['doctor', 'config'])
       expect(stdout).toContain('~ home-relative path')
       // User settings should NOT suggest $CLAUDE_PROJECT_DIR
       expect(stdout).not.toContain('$CLAUDE_PROJECT_DIR prefix')
@@ -331,9 +331,9 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(1)
-      expect(stdout).toContain('2 errors')
+      expect(stdout).toContain('doctor: 2 issues found, 0 fixed')
     } finally {
       await env.cleanup()
     }
@@ -351,9 +351,9 @@ describe('shan lint hooks', () => {
       },
     })
     try {
-      const { stdout, exitCode } = await env.run(['lint', 'hooks'])
+      const { stdout, exitCode } = await env.run(['doctor', 'config'])
       expect(exitCode).toBe(1)
-      expect(stdout).toContain('no-relative-hook-path')
+      expect(stdout).toContain('config/no-relative-hook-path')
       expect(stdout).toContain('local/hook.sh')
     } finally {
       await env.cleanup()
@@ -361,12 +361,12 @@ describe('shan lint hooks', () => {
   })
 })
 
-describe('shan lint (bare)', () => {
-  test('runs all rules when no subcommand given', async () => {
+describe('shan doctor (bare)', () => {
+  test('runs all namespaces when no selector is given', async () => {
     const env = await setupTestEnv()
     await env.writeUserSettings({})
     try {
-      const { stdout, exitCode } = await env.run(['lint'])
+      const { stdout, exitCode } = await env.run(['doctor'])
       expect(exitCode).toBe(0)
       expect(stdout).toContain('all clear')
     } finally {
@@ -374,13 +374,13 @@ describe('shan lint (bare)', () => {
     }
   })
 
-  test('unknown lint subcommand errors', async () => {
+  test('unknown doctor selector errors', async () => {
     const env = await setupTestEnv()
     await env.writeUserSettings({})
     try {
-      const { stderr, exitCode } = await env.run(['lint', 'nonexistent'])
+      const { stderr, exitCode } = await env.run(['doctor', 'nonexistent'])
       expect(exitCode).toBe(1)
-      expect(stderr).toContain('Unknown lint command')
+      expect(stderr).toContain('Unknown doctor selector')
     } finally {
       await env.cleanup()
     }

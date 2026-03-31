@@ -254,5 +254,5 @@ const executePlan = (plan: MigrationPlan, d: MigrateDirs) =>
     yield* Console.log('')
     yield* Console.log(`Migrated ${plan.moves.length} skills to ${d.libraryDir}`)
     yield* Console.log('')
-    yield* Console.log("Run 'shan skills doctor' to verify the migration.")
+    yield* Console.log("Run 'shan doctor skills' to verify the migration.")
   })

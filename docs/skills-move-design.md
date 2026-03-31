@@ -509,11 +509,11 @@ This is a CLI-only concern — the underlying operations are not blocked, becaus
 
 ### Overview
 
-`shan skills doctor` diagnoses AND auto-fixes by default. Use `--no-fix` for report-only mode.
+`shan doctor skills` diagnoses AND auto-fixes by default. Use `--no-fix` for report-only mode.
 
 ```
-shan skills doctor              # detect + auto-fix (default)
-shan skills doctor --no-fix     # detect + report only
+shan doctor skills              # detect + auto-fix (default)
+shan doctor skills --no-fix     # detect + report only
 ```
 
 ### Aspect Model
@@ -634,7 +634,7 @@ doctor: 5 issues found (--no-fix: report only)
   stale-router:      ts (project) — children changed
   name-conflict:     linear (user library) collides with linear (project core)
 
-  Run `shan skills doctor` to auto-fix 4 of 5 issues
+  Run `shan doctor skills` to auto-fix 4 of 5 issues
 ```
 
 ---
@@ -1123,20 +1123,20 @@ shan skills on linear,nonexistent             # aborts — linear NOT turned on
 shan skills off linear,nonexistent            # aborts — linear NOT turned off
 
 # Doctor aspects
-shan skills doctor                            # detect + auto-fix
-shan skills doctor --no-fix                   # detect + report only
+shan doctor skills                            # detect + auto-fix
+shan doctor skills --no-fix                   # detect + report only
 
 # Doctor: broken symlink with git rename
 # (rename a skill dir in the library, commit, then run doctor)
 mv ~/.claude/skills-library/playwright ~/.claude/skills-library/testing/playwright
 git add -A && git commit -m "reorganize"
-shan skills doctor                            # should detect rename + repoint
+shan doctor skills                            # should detect rename + repoint
 
 # Doctor: state drift (manual symlink removal)
 rm .claude/skills/playwright                  # manually delete symlink
-shan skills doctor                            # should re-create symlink
+shan doctor skills                            # should re-create symlink
 
 # Doctor: new leaf in installed group
 mkdir -p ~/.claude/skills-library/ts/newchild && echo "..." > ~/.claude/skills-library/ts/newchild/SKILL.md
-shan skills doctor                            # should symlink new leaf
+shan doctor skills                            # should symlink new leaf
 ```

@@ -5,6 +5,7 @@ lucid_generated: true
 generated_at: '2026-03-16T00:00:00Z'
 source_files:
   - src/bin/shan.ts
+  - src/bin/doctor.ts
   - src/bin/init.ts
   - src/bin/transcript/print.ts
   - src/bin/transcript/dump.ts
@@ -18,7 +19,6 @@ source_files:
   - src/bin/skills/history.ts
   - src/bin/skills/undo.ts
   - src/bin/skills/redo.ts
-  - src/bin/skills/doctor.ts
   - src/bin/skills/migrate.ts
   - src/bin/skills/install.ts
   - src/bin/skills/install-user.ts
@@ -29,6 +29,7 @@ source_files:
 ```
 shan init
 shan <namespace> <command> [target] [options]
+shan doctor [selector] [options]
 ```
 
 ## Global options
@@ -36,12 +37,13 @@ shan <namespace> <command> [target] [options]
 | Flag             | Description                                                |
 | ---------------- | ---------------------------------------------------------- |
 | `--all`          | Show all sessions/task lists, not just the current project |
+| `--no-fix`       | Report doctor findings without applying fixes              |
 | `--scope user`   | Operate on user-level outfit/library (default: project)    |
 | `--global`       | Alias for `--scope user`                                   |
 | `--skill <name>` | Select specific skills for `skills install` (repeatable)   |
 | `--strict`       | Treat no-ops (already on, already off) as errors           |
 
-## Skills config
+## Skills and doctor config
 
 Shan reads skills configuration from `~/.config/shan/config.json`.
 
@@ -52,20 +54,36 @@ Shan reads skills configuration from `~/.config/shan/config.json`.
     "defaultScope": "project",
     "historyLimit": 50,
     "agents": "auto"
+  },
+  "doctor": {
+    "disabled": ["skills/agent-mirror"]
   }
 }
 ```
 
-| Key                      | Values                          | Description                                            |
-| ------------------------ | ------------------------------- | ------------------------------------------------------ |
-| `skills.defaultScope`    | `project`, `user`               | Default scope for skills commands that support scoping |
-| `skills.historyLimit`    | integer                         | Max retained history entries per scope                 |
-| `skills.agents`          | `"auto"`, `["claude", "codex"]` | Enabled agent views for outfit mirroring               |
-| `skills.doctor.disabled` | aspect names                    | Skip selected doctor aspects                           |
+| Key                   | Values                          | Description                                              |
+| --------------------- | ------------------------------- | -------------------------------------------------------- |
+| `skills.defaultScope` | `project`, `user`               | Default scope for skills commands that support scoping   |
+| `skills.historyLimit` | integer                         | Max retained history entries per scope                   |
+| `skills.agents`       | `"auto"`, `["claude", "codex"]` | Enabled agent views for outfit mirroring                 |
+| `doctor.disabled`     | namespaced rule IDs             | Skip selected doctor rules such as `skills/agent-mirror` |
 
 `skills.agents: "auto"` probes `claude` and `codex` on `PATH`, then caches the detected set in `~/.local/shan/cache.json` for 24 hours. Delete that cache file to force an immediate refresh.
 
 Claude is the canonical agent for now. Any non-Claude enabled agents are managed as whole-directory mirrors of the matching Claude outfit directories.
+
+## Doctor namespace
+
+### `doctor [selector] [--no-fix]`
+
+Run namespaced doctor checks from one root entrypoint. Omit the selector to run everything, or target a namespace/rule such as `skills`, `skills/agent-mirror`, `config`, or `config/no-relative-hook-path`.
+
+```sh
+shan doctor
+shan doctor skills
+shan doctor config
+shan doctor config/no-relative-hook-path --no-fix
+```
 
 ## Init
 
@@ -242,12 +260,13 @@ shan task open --all
 
 ## Skills namespace
 
-### `skills` / `skills list`
+### `skills` / `s` / `skills list`
 
 Show the effective outfit across all layers: core skills, pluggable-on, pluggable-off, budget, and any configured mirror agents.
 
 ```sh
 shan skills
+shan s
 shan skills list
 ```
 
@@ -348,9 +367,9 @@ shan skills redo 2
 shan skills redo --scope user
 ```
 
-### `skills doctor [--no-fix]`
+### `doctor skills [--no-fix]`
 
-Run 14 diagnostic aspects against the outfit. Default: detect and auto-fix. Use `--no-fix` for report-only mode.
+Run 14 diagnostic aspects against the outfit via the root doctor command. Default: detect and auto-fix. Use `--no-fix` for report-only mode.
 
 **Aspects**: agent-mirror, broken-symlink (with git rename detection), state-drift, new-leaf, stale-router, orphaned-router, orphaned-scope, stale-gitignore, frontmatter-mismatch, name-conflict, duplicate-name, shadow, stale-shadow, cross-scope-install.
 
@@ -365,8 +384,8 @@ The `agent-mirror` aspect is intentionally defensive around janky layouts. When 
 Auto-fix mode applies every fixable finding except explicit conflict/manual-review cases.
 
 ```sh
-shan skills doctor
-shan skills doctor --no-fix
+shan doctor skills
+shan doctor skills --no-fix
 ```
 
 ### `skills migrate [--execute]`

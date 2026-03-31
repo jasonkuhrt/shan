@@ -2579,15 +2579,15 @@ describe('loadConfig with agents', () => {
             agents: 'auto',
             historyLimit: 25,
             defaultScope: 'user',
-            doctor: { disabled: ['broken-symlinks'] },
           },
+          doctor: { disabled: ['skills/broken-symlink'] },
         }),
       )
       const config = await run(Lib.loadConfig())
       expect(config.skills.agents).toBe('auto')
       expect(config.skills.historyLimit).toBe(25)
       expect(config.skills.defaultScope).toBe('user')
-      expect(config.skills.doctor?.disabled).toEqual(['broken-symlinks'])
+      expect(config.doctor?.disabled).toEqual(['skills/broken-symlink'])
     } finally {
       if (backup) await writeFile(configFile, backup)
       else await rm(configFile, { force: true }).catch(() => {})
