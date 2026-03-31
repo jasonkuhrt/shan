@@ -2594,6 +2594,37 @@ describe('loadConfig with agents', () => {
     }
   })
 
+  test('canonicalizes and merges legacy disabled doctor rules', async () => {
+    const configFile = Lib.CONFIG_FILE
+    const backup = await readFile(configFile, 'utf-8').catch(() => null)
+    try {
+      await mkdir(Lib.CONFIG_DIR, { recursive: true })
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          skills: {
+            agents: 'auto',
+            historyLimit: 25,
+            defaultScope: 'user',
+            doctor: { disabled: ['broken-symlink', 'stale-gitignore'] },
+          },
+          doctor: {
+            disabled: ['config/no-relative-hook-path', 'broken-symlink', 'skills/broken-symlink'],
+          },
+        }),
+      )
+      const config = await run(Lib.loadConfig())
+      expect(config.doctor?.disabled).toEqual([
+        'config/no-relative-hook-path',
+        'skills/broken-symlink',
+        'skills/stale-gitignore',
+      ])
+    } finally {
+      if (backup) await writeFile(configFile, backup)
+      else await rm(configFile, { force: true }).catch(() => {})
+    }
+  })
+
   test('parses agents: array from config', async () => {
     const configFile = Lib.CONFIG_FILE
     const backup = await readFile(configFile, 'utf-8').catch(() => null)

@@ -102,16 +102,24 @@ const renderFindings = (findings: RenderableFinding[]) =>
 const countErrors = (findings: RenderableFinding[]): number =>
   findings.filter((finding) => finding.severity === 'error').length
 
+const qualifyConfigFinding = (finding: LintFinding): LintFinding => ({
+  ...finding,
+  rule: `config/${finding.rule}`,
+})
+
+export const selectConfigFindings = (
+  selector: string,
+  disabledRules: ReadonlySet<string>,
+  findings: readonly LintFinding[],
+): LintFinding[] =>
+  findings
+    .map(qualifyConfigFinding)
+    .filter((finding) => !disabledRules.has(finding.rule))
+    .filter((finding) => matchesSelector(selector, finding.rule))
+
 const collectConfigFindings = (selector: string, disabledRules: Set<string>) =>
   Effect.sync(() => {
     if (!selectorTargetsNamespace(selector, 'config')) {
-      return {
-        findings: [] as RenderableFinding[],
-        note: null as string | null,
-      }
-    }
-
-    if (disabledRules.has('config/no-relative-hook-path')) {
       return {
         findings: [] as RenderableFinding[],
         note: null as string | null,
@@ -126,17 +134,15 @@ const collectConfigFindings = (selector: string, disabledRules: Set<string>) =>
       }
     }
 
-    const findings = lintHooks(ctx).map((finding) => {
-      const prefixedFinding: LintFinding = {
-        ...finding,
-        rule: `config/${finding.rule}`,
-      }
-      return {
-        severity: finding.severity,
-        fixable: false,
-        render: () => renderLintFinding(prefixedFinding),
-      } satisfies RenderableFinding
-    })
+    const findings = selectConfigFindings(selector, disabledRules, lintHooks(ctx)).map(
+      (finding) => {
+        return {
+          severity: finding.severity,
+          fixable: false,
+          render: () => renderLintFinding(finding),
+        } satisfies RenderableFinding
+      },
+    )
 
     return {
       findings,

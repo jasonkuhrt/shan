@@ -347,6 +347,54 @@ describe('program', () => {
     }
   })
 
+  test('lint namespace prints migration guidance', async () => {
+    const origErr = console.error
+    const origLog = console.log
+    const err = mock(() => {})
+    const log = mock(() => {})
+    console.error = err
+    console.log = log
+
+    try {
+      await withArgv(['lint', 'hooks'], async () => {
+        await expect(Effect.runPromise(program)).rejects.toThrow('Unknown command')
+      })
+
+      const output = [...err.mock.calls, ...log.mock.calls]
+        .map((call) => call.map(String).join(' '))
+        .join('\n')
+
+      expect(output).toContain('shan doctor config')
+    } finally {
+      console.error = origErr
+      console.log = origLog
+    }
+  })
+
+  test('skills doctor prints migration guidance', async () => {
+    const origErr = console.error
+    const origLog = console.log
+    const err = mock(() => {})
+    const log = mock(() => {})
+    console.error = err
+    console.log = log
+
+    try {
+      await withArgv(['skills', 'doctor'], async () => {
+        await expect(Effect.runPromise(program)).rejects.toThrow('Unknown command')
+      })
+
+      const output = [...err.mock.calls, ...log.mock.calls]
+        .map((call) => call.map(String).join(' '))
+        .join('\n')
+
+      expect(output).toContain('shan doctor skills')
+    } finally {
+      console.error = origErr
+      console.log = origLog
+    }
+  })
+
   test('unknown namespace fails', async () => {
     await withArgv(['bogus'], async () => {
       await expect(Effect.runPromise(program)).rejects.toThrow('Unknown namespace')

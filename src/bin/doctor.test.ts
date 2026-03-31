@@ -3,7 +3,8 @@ import { Effect } from 'effect'
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as Lib from '../lib/skill-library.js'
-import { doctor } from './doctor.js'
+import { doctor, selectConfigFindings } from './doctor.js'
+import type { Finding as LintFinding } from './lint/finding.js'
 import { skillsOn } from './skills/on.js'
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
@@ -25,11 +26,47 @@ const setupProjectLibrary = async (...skills: string[]) => {
   }
 }
 
+const makeLintFinding = (overrides: Partial<LintFinding> = {}): LintFinding => ({
+  file: '~/.claude/settings.json',
+  location: 'hooks.Stop[0].hooks[0]',
+  command: '.claude/hooks/foo.sh',
+  severity: 'error',
+  rule: 'no-relative-hook-path',
+  message: 'Relative path breaks when Claude changes directory',
+  detail: 'Details',
+  happyPaths: [],
+  references: [],
+  ...overrides,
+})
+
 describe('doctor', () => {
   test('rejects unknown selectors', async () => {
     await expect(run(doctor({ selector: 'bogus', noFix: false }))).rejects.toThrow(
       'Unknown command',
     )
+  })
+
+  test('honors legacy skills.doctor.disabled config entries', async () => {
+    await mkdir(path.dirname(Lib.CONFIG_FILE), { recursive: true })
+    await writeFile(
+      Lib.CONFIG_FILE,
+      JSON.stringify({
+        version: 1,
+        skills: {
+          historyLimit: 50,
+          defaultScope: 'project',
+          agents: ['claude'],
+          doctor: { disabled: ['broken-symlink'] },
+        },
+      }),
+    )
+    await setupProjectLibrary('doctor-skill')
+    await run(skillsOn('doctor-skill', { scope: 'project', strict: false }))
+
+    const outfitDir = path.join(process.cwd(), '.claude', 'skills')
+    await symlink('/nonexistent/path', path.join(outfitDir, 'broken-link'))
+
+    await run(doctor({ selector: 'skills', noFix: true }))
   })
 
   test('supports exact config rule selectors', async () => {
@@ -46,6 +83,15 @@ describe('doctor', () => {
     await expect(
       run(doctor({ selector: 'config/no-relative-hook-path', noFix: true })),
     ).rejects.toThrow('Doctor errors found')
+  })
+
+  test('selectConfigFindings filters exact rule selectors across multiple config rules', () => {
+    const findings = selectConfigFindings('config/no-relative-hook-path', new Set(), [
+      makeLintFinding({ rule: 'no-relative-hook-path' }),
+      makeLintFinding({ rule: 'no-shell-eval' }),
+    ])
+
+    expect(findings.map((finding) => finding.rule)).toEqual(['config/no-relative-hook-path'])
   })
 
   test('skips disabled config rules from root doctor config', async () => {

@@ -586,6 +586,26 @@ const parseConfiguredAgents = (skills: Record<string, unknown> | undefined): 'au
   return DEFAULT_CONFIG.skills.agents
 }
 
+const normalizeDoctorDisabledRule = (rule: string): string | null => {
+  const normalized = rule.trim().replace(/\/+$/, '')
+  if (normalized === '') return null
+  return normalized.includes('/') ? normalized : `skills/${normalized}`
+}
+
+const normalizeDoctorDisabledRules = (rules: readonly string[]): string[] => {
+  const unique = new Set<string>()
+  const normalized: string[] = []
+
+  for (const rule of rules) {
+    const nextRule = normalizeDoctorDisabledRule(rule)
+    if (!nextRule || unique.has(nextRule)) continue
+    unique.add(nextRule)
+    normalized.push(nextRule)
+  }
+
+  return normalized
+}
+
 export const loadConfig = (): Effect.Effect<ShanConfig> =>
   Effect.gen(function* () {
     const content =
@@ -597,7 +617,12 @@ export const loadConfig = (): Effect.Effect<ShanConfig> =>
 
       const skills = getObject(parsed, 'skills')
       const doctor = getObject(parsed, 'doctor')
+      const legacySkillsDoctor = skills ? getObject(skills, 'doctor') : undefined
       const defaultScope = skills ? getString(skills, 'defaultScope') : undefined
+      const disabledRules = normalizeDoctorDisabledRules([
+        ...getStringArray(doctor ?? {}, 'disabled'),
+        ...getStringArray(legacySkillsDoctor ?? {}, 'disabled'),
+      ])
 
       return {
         version: 1 as const,
@@ -611,7 +636,7 @@ export const loadConfig = (): Effect.Effect<ShanConfig> =>
               : DEFAULT_CONFIG.skills.defaultScope,
           agents: parseConfiguredAgents(skills),
         },
-        ...(doctor ? { doctor: { disabled: getStringArray(doctor, 'disabled') } } : {}),
+        ...(disabledRules.length > 0 ? { doctor: { disabled: disabledRules } } : {}),
       } satisfies ShanConfig
     } catch {
       return DEFAULT_CONFIG

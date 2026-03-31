@@ -250,6 +250,13 @@ export const resolveSkillsScope = (flags: ParsedFlags, command: string, targetIn
     return yield* resolveSkillsOnScope(flags, targetInput)
   })
 
+const removedCommand = (removed: string, replacement: string, detail: string) =>
+  Effect.gen(function* () {
+    yield* Console.error(`\`${removed}\` was removed. Use \`${replacement}\` instead.`)
+    yield* Console.log(`\n${detail}`)
+    return yield* Effect.fail(new Error('Unknown command'))
+  })
+
 export const program = Effect.gen(function* () {
   const [namespace, command, ...args] = process.argv.slice(2)
 
@@ -283,6 +290,12 @@ export const program = Effect.gen(function* () {
       )
       return yield* Effect.fail(new Error('Unknown command'))
     }
+  } else if (namespace === 'lint') {
+    return yield* removedCommand(
+      'shan lint',
+      'shan doctor config',
+      'Run `shan doctor config` for Claude settings checks, or `shan doctor config/<rule>` to target one config rule.',
+    )
   } else if (namespace === 'task') {
     const { flags, positional } = parseArgs(args)
 
@@ -325,6 +338,12 @@ export const program = Effect.gen(function* () {
       yield* skillsUndo(Number(positional[0]) || 1, scope)
     } else if (command === 'redo') {
       yield* skillsRedo(Number(positional[0]) || 1, scope)
+    } else if (command === 'doctor') {
+      return yield* removedCommand(
+        'shan skills doctor',
+        'shan doctor skills',
+        'Run `shan doctor skills` for the full skills doctor pass, or `shan doctor skills/<rule>` for one namespaced skill rule.',
+      )
     } else if (command === 'migrate') {
       yield* skillsMigrate({ execute: flags.execute })
     } else if (command === 'create') {
