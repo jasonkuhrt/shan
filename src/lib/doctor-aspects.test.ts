@@ -54,7 +54,7 @@ const makeContext = (overrides: Partial<Aspects.DoctorContext> = {}): Aspects.Do
 
 describe('ALL_ASPECTS', () => {
   test('exports all aspects', () => {
-    expect(Aspects.ALL_ASPECTS.length).toBe(18)
+    expect(Aspects.ALL_ASPECTS.length).toBe(19)
   })
   test('each aspect has required fields', () => {
     for (const aspect of Aspects.ALL_ASPECTS) {
@@ -63,6 +63,86 @@ describe('ALL_ASPECTS', () => {
       expect(['error', 'warning', 'info']).toContain(aspect.level)
       expect(typeof aspect.detect).toBe('function')
     }
+  })
+})
+
+// ── invalid-outfit-entry ──────────────────────────────────────────
+
+describe('invalid-outfit-entry aspect', () => {
+  const aspect = Aspects.ALL_ASPECTS.find((a) => a.name === 'invalid-outfit-entry')!
+
+  test('no findings when all outfit entries have valid names', async () => {
+    const ctx = makeContext({
+      userOutfit: [
+        Lib.OutfitEntry.make({
+          name: 'valid-skill',
+          dir: '/tmp/valid-skill',
+          commitment: 'pluggable',
+          scope: 'user',
+        }),
+      ],
+    })
+    const findings = await run(aspect.detect(ctx))
+    expect(findings).toEqual([])
+  })
+
+  test('detects dotfile entry as invalid', async () => {
+    const ctx = makeContext({
+      userOutfit: [
+        Lib.OutfitEntry.make({
+          name: '.system',
+          dir: '/tmp/.system',
+          commitment: 'core',
+          scope: 'user',
+        }),
+      ],
+    })
+    const findings = await run(aspect.detect(ctx))
+    expect(findings.length).toBe(1)
+    expect(findings[0]!.aspect).toBe('invalid-outfit-entry')
+    expect(findings[0]!.level).toBe('warning')
+    expect(findings[0]!.message).toContain('.system')
+    expect(findings[0]!.fixable).toBe(true)
+    expect(findings[0]!.fix).toBeDefined()
+  })
+
+  test('detects numeric-prefixed entry as invalid', async () => {
+    const ctx = makeContext({
+      projectOutfit: [
+        Lib.OutfitEntry.make({
+          name: '123bad',
+          dir: '/tmp/123bad',
+          commitment: 'core',
+          scope: 'project',
+        }),
+      ],
+    })
+    const findings = await run(aspect.detect(ctx))
+    expect(findings.length).toBe(1)
+    expect(findings[0]!.message).toContain('123bad')
+    expect(findings[0]!.message).toContain('project')
+  })
+
+  test('fix removes the invalid entry', async () => {
+    const invalidDir = path.join(tmpBase, 'invalid-outfit-fix-test')
+    await mkdir(invalidDir, { recursive: true })
+
+    const ctx = makeContext({
+      userOutfit: [
+        Lib.OutfitEntry.make({
+          name: '.bad',
+          dir: invalidDir,
+          commitment: 'core',
+          scope: 'user',
+        }),
+      ],
+    })
+    const findings = await run(aspect.detect(ctx))
+    expect(findings[0]!.fix).toBeDefined()
+
+    const description = await run(findings[0]!.fix!())
+    expect(description).toContain('Removed')
+    expect(description).toContain('.bad')
   })
 })
 

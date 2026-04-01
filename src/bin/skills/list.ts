@@ -122,4 +122,21 @@ export const skillsList = () =>
         )
       }
     }
+
+    if (graph.diagnostics.length > 0) {
+      yield* Console.log('')
+      yield* Console.log('Warnings:')
+      for (const diagnostic of graph.diagnostics) {
+        const fixLabel = diagnostic.fixable ? ' [fixable]' : ''
+        yield* Console.log(`  ! ${diagnostic.message}${fixLabel}`)
+      }
+
+      const fixableCount = graph.diagnostics.filter((d) => d.fixable).length
+      if (fixableCount > 0) {
+        yield* Console.log('')
+        yield* Console.log(
+          `  Run \`shan doctor\` to auto-fix ${fixableCount} issue${fixableCount === 1 ? '' : 's'}.`,
+        )
+      }
+    }
   })

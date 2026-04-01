@@ -1,6 +1,7 @@
-import { Effect } from 'effect'
+import { Data, Effect, Either } from 'effect'
 import { lstat, realpath } from 'node:fs/promises'
 import * as path from 'node:path'
+import { INVALID_OUTFIT_ENTRY_ASPECT, type Diagnostic } from './diagnostic.js'
 import * as Lib from './skill-library.js'
 import * as SkillName from './skill-name.js'
 
@@ -46,9 +47,40 @@ export interface DependencyIssue {
   readonly skill: ActiveSkill
 }
 
+// ── Outfit entry validation ─────────────────────────────────────────
+
+export class InvalidOutfitEntryName extends Data.TaggedError('InvalidOutfitEntryName')<{
+  readonly entryName: string
+  readonly scope: Lib.Scope
+  readonly entryDir: string
+}> {}
+
+export const validateOutfitEntryName = (
+  entry: Lib.OutfitEntry,
+): Effect.Effect<void, InvalidOutfitEntryName> =>
+  SkillName.parseFlatName(entry.name)
+    ? Effect.void
+    : Effect.fail(
+        new InvalidOutfitEntryName({
+          entryName: entry.name,
+          scope: entry.scope,
+          entryDir: entry.dir,
+        }),
+      )
+
+const invalidEntryToDiagnostic = (error: InvalidOutfitEntryName): Diagnostic => ({
+  aspect: INVALID_OUTFIT_ENTRY_ASPECT,
+  level: 'warning',
+  message: `Invalid outfit entry "${error.entryName}" in ${error.scope} outfit — not a valid skill name`,
+  fixable: true,
+})
+
+// ── Graph types ─────────────────────────────────────────────────────
+
 export interface ActiveSkillGraph {
   readonly dependencyLeafIdsBySkill: ReadonlyMap<string, readonly string[]>
   readonly dependentsBySkill: ReadonlyMap<string, readonly string[]>
+  readonly diagnostics: readonly Diagnostic[]
   readonly issues: readonly DependencyIssue[]
   readonly skills: readonly ActiveSkill[]
   readonly skillsById: ReadonlyMap<string, ActiveSkill>
@@ -196,9 +228,13 @@ const inferObservedColonName = (entry: Lib.OutfitEntry, sourcePath: string): str
     }
   }
 
-  const relPath = Lib.unflattenName(entry.name)
-  if (!relPath) return null
-  return Lib.pathToColon(relPath)
+  try {
+    const relPath = Lib.unflattenName(entry.name)
+    if (!relPath) return null
+    return Lib.pathToColon(relPath)
+  } catch {
+    return null
+  }
 }
 
 const resolveSourcePath = (entry: Lib.OutfitEntry) =>
@@ -218,6 +254,7 @@ const detectSourceKind = (entry: Lib.OutfitEntry): 'core' | 'library' =>
 export const loadActiveSkills = () =>
   Effect.gen(function* () {
     const allSkills: ActiveSkill[] = []
+    const diagnostics: Diagnostic[] = []
 
     for (const scope of ['user', 'project'] as const) {
       const routers = new Set(yield* Lib.detectGeneratedRouters(scope))
@@ -225,6 +262,12 @@ export const loadActiveSkills = () =>
 
       for (const entry of outfit) {
         if (routers.has(entry.name)) continue
+
+        const validationResult = yield* validateOutfitEntryName(entry).pipe(Effect.either)
+        if (Either.isLeft(validationResult)) {
+          diagnostics.push(invalidEntryToDiagnostic(validationResult.left))
+          continue
+        }
 
         const sourcePath = yield* resolveSourcePath(entry)
         const frontmatterResult = yield* Lib.readFrontmatterResult(sourcePath)
@@ -248,11 +291,14 @@ export const loadActiveSkills = () =>
       }
     }
 
-    return allSkills.sort((left, right) =>
-      left.scope === right.scope
-        ? left.colonName.localeCompare(right.colonName)
-        : left.scope.localeCompare(right.scope),
-    )
+    return {
+      diagnostics,
+      skills: allSkills.sort((left, right) =>
+        left.scope === right.scope
+          ? left.colonName.localeCompare(right.colonName)
+          : left.scope.localeCompare(right.scope),
+      ),
+    }
   })
 
 const sortIds = (ids: Iterable<string>, skillsById: ReadonlyMap<string, ActiveSkill>): string[] =>
@@ -314,7 +360,10 @@ const detectCycles = (
   return cycleIssues
 }
 
-export const buildActiveSkillGraph = (skills: readonly ActiveSkill[]) =>
+export const buildActiveSkillGraph = (
+  skills: readonly ActiveSkill[],
+  diagnostics: readonly Diagnostic[] = [],
+) =>
   Effect.gen(function* () {
     const skillsById = new Map(skills.map((skill) => [skill.id, skill]))
     const activeIds = new Set(skills.map((skill) => skill.id))
@@ -405,6 +454,7 @@ export const buildActiveSkillGraph = (skills: readonly ActiveSkill[]) =>
           sortIds(dependents, skillsById),
         ]),
       ),
+      diagnostics,
       issues,
       skills,
       skillsById,
@@ -413,8 +463,8 @@ export const buildActiveSkillGraph = (skills: readonly ActiveSkill[]) =>
 
 export const loadActiveSkillGraph = () =>
   Effect.gen(function* () {
-    const skills = yield* loadActiveSkills()
-    return yield* buildActiveSkillGraph(skills)
+    const { skills, diagnostics } = yield* loadActiveSkills()
+    return yield* buildActiveSkillGraph(skills, diagnostics)
   })
 
 export const collectTransitiveDependencyIds = (

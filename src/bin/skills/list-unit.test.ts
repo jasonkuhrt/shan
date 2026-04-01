@@ -302,6 +302,49 @@ describe('skillsList', () => {
     expect(joined).toContain('\\- shared-base [project]')
   })
 
+  test('renders diagnostics as warnings for invalid outfit entries', async () => {
+    const output: string[] = []
+    const origLog = console.log
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(' '))
+    }
+
+    try {
+      // Create an invalid outfit entry (dotfile directory)
+      const outfitDir = path.join(TEMP_DIR, '.claude', 'skills')
+      await mkdir(path.join(outfitDir, '.invalid-entry'), { recursive: true })
+
+      await run(skillsList())
+    } finally {
+      console.log = origLog
+    }
+
+    const joined = output.join('\n')
+    expect(joined).toContain('Warnings:')
+    expect(joined).toContain('! Invalid outfit entry ".invalid-entry"')
+    expect(joined).toContain('[fixable]')
+    expect(joined).toContain('Run `shan doctor` to auto-fix')
+  })
+
+  test('does not render warnings section when all outfit entries are valid', async () => {
+    const output: string[] = []
+    const origLog = console.log
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(' '))
+    }
+
+    try {
+      await setupProjectLibrary('clean-skill')
+      await run(skillsOn('clean-skill', { scope: 'project', strict: false }))
+      await run(skillsList())
+    } finally {
+      console.log = origLog
+    }
+
+    const joined = output.join('\n')
+    expect(joined).not.toContain('Warnings:')
+  })
+
   test('excludes disableModelInvocation dependencies from closure cost totals', async () => {
     const output: string[] = []
     const origLog = console.log

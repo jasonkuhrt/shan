@@ -249,7 +249,7 @@ describe('buildActiveSkillGraph', () => {
     await mkdir(outfitDir, { recursive: true })
     await symlink('../skills-library/rel-target', path.join(outfitDir, 'rel-target'))
 
-    const activeSkills = await run(SkillGraph.loadActiveSkills())
+    const { skills: activeSkills } = await run(SkillGraph.loadActiveSkills())
 
     expect(activeSkills.map((skill) => skill.colonName)).toEqual(['rel-target'])
     expect(activeSkills[0]?.sourcePath).toBe(projectLibrarySkill)
@@ -257,5 +257,128 @@ describe('buildActiveSkillGraph', () => {
     await expect(run(SkillGraph.ensureSkillPathExists('project', 'missing-target'))).resolves.toBe(
       false,
     )
+  })
+})
+
+// ── Outfit entry diagnostics ──────────────────────────────────────
+
+describe('loadActiveSkills diagnostics', () => {
+  test('reports invalid outfit entry names as diagnostics and still loads valid entries', async () => {
+    const outfitDir = path.join(tmpBase, '.claude', 'skills')
+    await mkdir(outfitDir, { recursive: true })
+
+    // Invalid entry: starts with dot
+    await mkdir(path.join(outfitDir, '.system'))
+
+    // Valid entry: a real skill
+    await writeProjectSkill(tmpBase, 'valid-skill')
+    await symlink(
+      path.join(tmpBase, '.claude', 'skills-library', 'valid-skill'),
+      path.join(outfitDir, 'valid-skill'),
+    )
+
+    const { skills, diagnostics } = await run(SkillGraph.loadActiveSkills())
+
+    // Valid skill loaded
+    expect(skills.some((s) => s.colonName === 'valid-skill')).toBe(true)
+
+    // Invalid entry produced a diagnostic
+    const dotSystemDiag = diagnostics.find((d) => d.message.includes('.system'))
+    expect(dotSystemDiag).toBeDefined()
+    expect(dotSystemDiag!.aspect).toBe('invalid-outfit-entry')
+    expect(dotSystemDiag!.level).toBe('warning')
+    expect(dotSystemDiag!.fixable).toBe(true)
+  })
+
+  test('multiple invalid entries each produce a diagnostic', async () => {
+    const outfitDir = path.join(tmpBase, '.claude', 'skills')
+    await mkdir(outfitDir, { recursive: true })
+    await mkdir(path.join(outfitDir, '.hidden'))
+    await mkdir(path.join(outfitDir, '123-numeric'))
+
+    const { diagnostics } = await run(SkillGraph.loadActiveSkills())
+
+    const invalidEntryDiags = diagnostics.filter((d) => d.aspect === 'invalid-outfit-entry')
+    expect(invalidEntryDiags.length).toBeGreaterThanOrEqual(2)
+    expect(invalidEntryDiags.some((d) => d.message.includes('.hidden'))).toBe(true)
+    expect(invalidEntryDiags.some((d) => d.message.includes('123-numeric'))).toBe(true)
+  })
+
+  test('loadActiveSkillGraph carries diagnostics through to the graph', async () => {
+    const outfitDir = path.join(tmpBase, '.claude', 'skills')
+    await mkdir(outfitDir, { recursive: true })
+    await mkdir(path.join(outfitDir, '.bad-entry'))
+
+    const graph = await run(SkillGraph.loadActiveSkillGraph())
+
+    const diag = graph.diagnostics.find((d) => d.message.includes('.bad-entry'))
+    expect(diag).toBeDefined()
+    expect(diag!.aspect).toBe('invalid-outfit-entry')
+  })
+
+  test('no diagnostics when all entries are valid', async () => {
+    const outfitDir = path.join(tmpBase, '.claude', 'skills')
+    await mkdir(outfitDir, { recursive: true })
+
+    await writeProjectSkill(tmpBase, 'good-skill')
+    await symlink(
+      path.join(tmpBase, '.claude', 'skills-library', 'good-skill'),
+      path.join(outfitDir, 'good-skill'),
+    )
+
+    const { diagnostics } = await run(SkillGraph.loadActiveSkills())
+
+    expect(diagnostics.filter((d) => d.aspect === 'invalid-outfit-entry')).toEqual([])
+  })
+})
+
+// ── InvalidOutfitEntryName error type ─────────────────────────────
+
+describe('validateOutfitEntryName', () => {
+  test('succeeds for valid flat names', async () => {
+    const entry = { name: 'my-skill', dir: '/tmp/my-skill', commitment: 'pluggable', scope: 'user' }
+    await expect(
+      run(SkillGraph.validateOutfitEntryName(entry as Lib.OutfitEntry)),
+    ).resolves.toBeUndefined()
+  })
+
+  test('succeeds for namespaced flat names', async () => {
+    const entry = {
+      name: 'group_leaf',
+      dir: '/tmp/group_leaf',
+      commitment: 'pluggable',
+      scope: 'user',
+    }
+    await expect(
+      run(SkillGraph.validateOutfitEntryName(entry as Lib.OutfitEntry)),
+    ).resolves.toBeUndefined()
+  })
+
+  test('fails for dotfile names with InvalidOutfitEntryName', async () => {
+    const entry = {
+      name: '.system',
+      dir: '/tmp/.system',
+      commitment: 'core',
+      scope: 'user',
+    }
+    const error = await run(
+      SkillGraph.validateOutfitEntryName(entry as Lib.OutfitEntry).pipe(Effect.flip),
+    )
+    expect(error).toBeInstanceOf(SkillGraph.InvalidOutfitEntryName)
+    expect(error.entryName).toBe('.system')
+  })
+
+  test('fails for names starting with a digit', async () => {
+    const entry = {
+      name: '123abc',
+      dir: '/tmp/123abc',
+      commitment: 'core',
+      scope: 'project',
+    }
+    const error = await run(
+      SkillGraph.validateOutfitEntryName(entry as Lib.OutfitEntry).pipe(Effect.flip),
+    )
+    expect(error).toBeInstanceOf(SkillGraph.InvalidOutfitEntryName)
+    expect(error.entryName).toBe('123abc')
   })
 })

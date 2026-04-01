@@ -26,15 +26,9 @@ import * as SkillName from './skill-name.js'
 
 // ── Types ────────────────────────────────────────────────────────────
 
-export type Level = 'error' | 'warning' | 'info'
-
-export interface DoctorFinding {
-  readonly aspect: string
-  readonly level: Level
-  readonly message: string
-  readonly fixable: boolean
-  readonly fix?: () => Effect.Effect<string, unknown> // returns fix description
-}
+export type { Diagnostic as DoctorFinding, DiagnosticLevel as Level } from './diagnostic.js'
+import { INVALID_OUTFIT_ENTRY_ASPECT } from './diagnostic.js'
+import type { Diagnostic as DoctorFinding, DiagnosticLevel as Level } from './diagnostic.js'
 
 export interface DoctorContext {
   readonly scope: Lib.Scope
@@ -1206,9 +1200,44 @@ const dependencyActiveGraph: DoctorAspect = {
     }),
 }
 
+// ── Invalid outfit entry ─────────────────────────────────────────────
+
+const invalidOutfitEntry: DoctorAspect = {
+  name: INVALID_OUTFIT_ENTRY_ASPECT,
+  description: 'Detects outfit entries with names that are not valid skill names',
+  level: 'warning',
+  detect: (ctx) =>
+    Effect.sync(() => {
+      const findings: DoctorFinding[] = []
+      const allEntries = [
+        ...ctx.userOutfit.map((entry) => ({ entry, scope: 'user' as const })),
+        ...ctx.projectOutfit.map((entry) => ({ entry, scope: 'project' as const })),
+      ]
+
+      for (const { entry, scope } of allEntries) {
+        if (SkillName.parseFlatName(entry.name)) continue
+        findings.push(
+          finding(
+            INVALID_OUTFIT_ENTRY_ASPECT,
+            'warning',
+            `Invalid outfit entry "${entry.name}" in ${scope} outfit — not a valid skill name`,
+            true,
+            () =>
+              Effect.gen(function* () {
+                yield* Effect.tryPromise(() => rm(entry.dir, { recursive: true, force: true }))
+                return `Removed invalid outfit entry "${entry.name}" from ${scope} outfit`
+              }),
+          ),
+        )
+      }
+      return findings
+    }),
+}
+
 // ── Registry ─────────────────────────────────────────────────────────
 
 export const ALL_ASPECTS: readonly DoctorAspect[] = [
+  invalidOutfitEntry,
   agentMirror,
   brokenSymlink,
   stateDrift,
